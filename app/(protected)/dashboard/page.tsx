@@ -1,7 +1,7 @@
 import { DashboardView } from '@/components/dashboard/dashboard-view'
-import { requireSchedulerPageActor } from '@/lib/server/auth'
+import { requireDashboardPageActor } from '@/lib/server/auth'
 
 export default async function DashboardPage() {
-  await requireSchedulerPageActor()
+  await requireDashboardPageActor()
   return <DashboardView />
 }

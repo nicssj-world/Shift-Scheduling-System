@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireManager } from '@/lib/server/auth'
+import { requireAdmin } from '@/lib/server/auth'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
@@ -11,7 +11,7 @@ const addSchema = z.object({
 
 export async function POST(request: Request) {
   return respond(async () => {
-    await requireManager()
+    await requireAdmin()
     const body = await readJson(request, addSchema)
     const admin = getAdminClient()
     const { data, error } = await admin.from('shift_team_members')
@@ -35,7 +35,7 @@ const updateSchema = z.object({
 
 export async function PATCH(request: Request) {
   return respond(async () => {
-    await requireManager()
+    await requireAdmin()
     const body = await readJson(request, updateSchema)
     const patch: Record<string, unknown> = {}
     if (body.displayLabel !== undefined) patch.display_label = body.displayLabel || null
@@ -52,7 +52,7 @@ const removeSchema = z.object({ memberId: z.string().uuid() })
 
 export async function DELETE(request: Request) {
   return respond(async () => {
-    await requireManager()
+    await requireAdmin()
     const body = await readJson(request, removeSchema)
     const admin = getAdminClient()
     // deactivate instead of delete (history references the person)

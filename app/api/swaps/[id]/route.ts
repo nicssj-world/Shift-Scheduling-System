@@ -47,13 +47,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           await notifyUsers([String(swap.requester_id)], {
             type: 'swap_accepted', title: `${actor.name} ตอบรับคำขอแลกเวร — รอผู้จัดเวรอนุมัติ`, link: '/swaps',
           })
-          // notify schedulers/admin/managers
+          // notify schedulers/admin — Manager can no longer approve swaps
           const { data: schedulers } = await admin.from('shift_schedulers').select('user_id')
-          const { data: managers } = await admin.from('profiles').select('id,role')
-            .or('role.eq.Admin,role.eq.Manager,role.eq.admin,role.eq.staff')
+          const { data: admins } = await admin.from('profiles').select('id,role')
+            .or('role.eq.Admin,role.eq.admin')
           const approverIds = [
             ...(schedulers ?? []).map((s) => String(s.user_id)),
-            ...(managers ?? []).map((m) => String(m.id)),
+            ...(admins ?? []).map((m) => String(m.id)),
           ]
           await notifyUsers(approverIds, {
             type: 'swap_pending_approval', title: 'มีคำขอแลกเวรรออนุมัติ', link: '/swaps',

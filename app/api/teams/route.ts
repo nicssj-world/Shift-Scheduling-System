@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireActor, requireManager } from '@/lib/server/auth'
+import { requireActor, requireAdmin } from '@/lib/server/auth'
 import { getJobs, getRequirements, getShiftTypes, getTeamMembers, getTeams } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
@@ -36,7 +36,7 @@ const upsertSchema = z.object({
 
 export async function POST(request: Request) {
   return respond(async () => {
-    await requireManager()
+    await requireAdmin()
     const body = await readJson(request, upsertSchema)
     const admin = getAdminClient()
     const row = {

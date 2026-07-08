@@ -27,7 +27,11 @@ export async function getActor(): Promise<Actor | null> {
   if (status && status !== 'active') return null
 
   const role = normalizeRole(asString(profile.role))
-  const isAdmin = role === 'Admin'
+  // A designated scheduler (explicitly granted in shift_schedulers) has
+  // rights equivalent to Admin everywhere in this app, regardless of their
+  // base profiles.role — folding it into isAdmin means every existing
+  // isAdmin check automatically extends to them without touching each site.
+  const isAdmin = role === 'Admin' || Boolean(schedulerRow)
   const isManager = role === 'Manager'
   return {
     id: asString(profile.id),
@@ -38,7 +42,10 @@ export async function getActor(): Promise<Actor | null> {
     phone: asString(profile.phone) || null,
     isAdmin,
     isManager,
-    isScheduler: isAdmin || isManager || Boolean(schedulerRow),
+    // Manager does NOT get schedule-management rights — only Admin/designated
+    // schedulers do. Kept as a separate field (rather than just reusing
+    // isAdmin) so schedule-management call sites stay self-documenting.
+    isScheduler: isAdmin,
   }
 }
 
@@ -50,19 +57,13 @@ export async function requireActor() {
 
 export async function requireScheduler() {
   const actor = await requireActor()
-  if (!actor.isScheduler) throw new HttpError(403, 'ต้องเป็นผู้จัดเวร (Admin/Manager/ผู้ได้รับมอบหมาย)')
-  return actor
-}
-
-export async function requireManager() {
-  const actor = await requireActor()
-  if (!actor.isAdmin && !actor.isManager) throw new HttpError(403, 'ต้องเป็น Admin หรือ Manager')
+  if (!actor.isScheduler) throw new HttpError(403, 'ต้องเป็น Admin หรือผู้ได้รับมอบหมายจัดเวร')
   return actor
 }
 
 export async function requireAdmin() {
   const actor = await requireActor()
-  if (!actor.isAdmin) throw new HttpError(403, 'ต้องเป็น Admin')
+  if (!actor.isAdmin) throw new HttpError(403, 'ต้องเป็น Admin หรือผู้ได้รับมอบหมายจัดเวร')
   return actor
 }
 
@@ -78,8 +79,16 @@ export async function requireSchedulerPageActor() {
   return actor
 }
 
+/** Dashboard overview stays visible to Manager even though they can no
+ *  longer manage schedules or settings. */
+export async function requireDashboardPageActor() {
+  const actor = await requirePageActor()
+  if (!actor.isScheduler && !actor.isManager) redirect('/schedule')
+  return actor
+}
+
 export async function requireAdminPageActor() {
   const actor = await requirePageActor()
-  if (!actor.isAdmin && !actor.isManager) redirect('/schedule')
+  if (!actor.isAdmin) redirect('/schedule')
   return actor
 }

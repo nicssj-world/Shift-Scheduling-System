@@ -39,7 +39,7 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
     {
       section: 'ภาพรวม',
       items: [
-        { href: '/dashboard', label: 'Dashboard', icon: <BarChart3 size={17} />, show: actor.isScheduler },
+        { href: '/dashboard', label: 'Dashboard', icon: <BarChart3 size={17} />, show: actor.isScheduler || actor.isManager },
         { href: '/reports', label: 'รายงาน', icon: <FileSpreadsheet size={17} />, show: true },
         { href: '/analytics', label: 'วิเคราะห์', icon: <Sparkles size={17} />, show: actor.isScheduler },
         { href: '/notifications', label: 'การแจ้งเตือน', icon: <Bell size={17} />, show: true },
@@ -48,9 +48,9 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
     {
       section: 'ตั้งค่า',
       items: [
-        { href: '/admin/staff', label: 'บุคลากรและทีมเวร', icon: <Users size={17} />, show: actor.isAdmin || actor.isManager },
-        { href: '/admin/shift-types', label: 'ประเภทเวร', icon: <ClipboardList size={17} />, show: actor.isAdmin || actor.isManager },
-        { href: '/admin/holidays', label: 'วันหยุดพิเศษ', icon: <CalendarClock size={17} />, show: actor.isAdmin || actor.isManager },
+        { href: '/admin/staff', label: 'บุคลากรและทีมเวร', icon: <Users size={17} />, show: actor.isAdmin },
+        { href: '/admin/shift-types', label: 'ประเภทเวร', icon: <ClipboardList size={17} />, show: actor.isAdmin },
+        { href: '/admin/holidays', label: 'วันหยุดพิเศษ', icon: <CalendarClock size={17} />, show: actor.isAdmin },
         { href: '/admin/settings', label: 'ตั้งค่าระบบ', icon: <Settings size={17} />, show: actor.isAdmin },
       ],
     },
