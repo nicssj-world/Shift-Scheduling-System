@@ -85,7 +85,11 @@ export function RosterGrid({ team, shiftTypes, requirements, jobs, days, holiday
           <tr>
             <th rowSpan={2} colSpan={2} className="min-w-14">วันที่</th>
             {groups.map((type) => (
-              <th key={type.id} colSpan={columnsFor(type).length} className="shift-sep">
+              <th
+                key={type.id} colSpan={columnsFor(type).length} className="shift-sep"
+                style={{ borderBottom: `3px solid ${type.color}` }}
+              >
+                <span className="mr-1 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ background: type.color }} />
                 {type.name_th} ({thaiTime(type.start_time)}-{type.end_time.startsWith('00') ? '24.00' : thaiTime(type.end_time)} น.)
               </th>
             ))}
@@ -93,7 +97,10 @@ export function RosterGrid({ team, shiftTypes, requirements, jobs, days, holiday
           <tr>
             {groups.map((type) =>
               columnsFor(type).map((job, i) => (
-                <th key={`${type.id}-${i}`} className={`min-w-20 ${i === 0 ? 'shift-sep' : ''}`}>
+                <th
+                  key={`${type.id}-${i}`} className={`min-w-20 ${i === 0 ? 'shift-sep' : ''}`}
+                  style={{ borderBottom: `3px solid ${type.color}` }}
+                >
                   {job ? job.name_th : `คนที่ ${i + 1}`}
                 </th>
               )),
