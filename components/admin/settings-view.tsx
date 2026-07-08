@@ -11,7 +11,7 @@ type SchedulerConfig = {
   allowAfternoonNightDouble: boolean
   minRestHoursAfterNight: number
   requireWeeklyDayOff: boolean
-  weights: { total: number; type: number; weekend: number; consecutive: number }
+  weights: { total: number; type: number; weekend: number; consecutive: number; pairing: number }
 }
 
 type SettingsData = {
@@ -98,6 +98,7 @@ export function SettingsView() {
               ['type', 'เวรประเภทเดียวกัน'],
               ['weekend', 'เวรวันหยุด'],
               ['consecutive', 'วันติดต่อกัน'],
+              ['pairing', 'จับคู่คนเดิมซ้ำ'],
             ] as [keyof SchedulerConfig['weights'], string][]).map(([key, label]) => (
               <Field key={key} label={label}>
                 <input type="number" min={0} className={inputCls} value={s.weights[key]}

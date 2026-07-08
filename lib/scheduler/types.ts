@@ -18,6 +18,9 @@ export type SchedulerWeights = {
   type: number
   weekend: number
   consecutive: number
+  /** Penalty per prior shared shift with someone already picked for the same
+   *  slot — discourages the same pairs of people always working together. */
+  pairing: number
 }
 
 export type SchedulerConfig = {
@@ -33,7 +36,7 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   allowAfternoonNightDouble: true,
   minRestHoursAfterNight: 8,
   requireWeeklyDayOff: true,
-  weights: { total: 10, type: 4, weekend: 6, consecutive: 3 },
+  weights: { total: 10, type: 4, weekend: 6, consecutive: 3, pairing: 4 },
 }
 
 export type StaffIn = {

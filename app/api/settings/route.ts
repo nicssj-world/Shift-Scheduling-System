@@ -34,6 +34,7 @@ const putSchema = z.object({
     weights: z.object({
       total: z.number().min(0), type: z.number().min(0),
       weekend: z.number().min(0), consecutive: z.number().min(0),
+      pairing: z.number().min(0),
     }),
   }).optional(),
   swap: z.object({ requiresApproval: z.boolean() }).optional(),

@@ -99,10 +99,43 @@ describe('generateSchedule', () => {
 
     for (const [, stats] of Object.entries(result.stats)) {
       const counts = FOUR_JOBS.map((j) => stats.byJob[j.code] ?? 0)
-      expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(2)
+      // Slightly looser than per-person job counts alone would need, because
+      // the date-varying tiebreak (see tieBreakHash) deliberately mixes up
+      // who gets picked together each day to avoid repeat-pairing cliques —
+      // that healthy people-level variety trades off a little job-level
+      // smoothness within a single month (it still averages out over time
+      // via carry-in).
+      expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(3)
     }
     // every assignment got a job
     expect(result.assignments.every((a) => a.jobId !== null)).toBe(true)
+  })
+
+  it('spreads out who works together instead of locking the same pair in repeatedly', () => {
+    // Single 2-person slot, 10 staff — many equally-fair candidates every
+    // time totals tie, so the only thing that can stop the same duo from
+    // being reselected forever is penalizing repeat pairings.
+    const slot = {
+      shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      requiredByDayClass: { weekday: 2, weekend: 2, holiday: 2 } as const,
+    }
+    const input = baseInput({ staff: makeStaff(10), slots: [slot], days: makeDays('2026-08') })
+    const result = generateSchedule(input)
+
+    const byDay = new Map<string, string[]>()
+    for (const a of result.assignments) byDay.set(a.date, [...(byDay.get(a.date) ?? []), a.userId])
+
+    const pairCounts = new Map<string, number>()
+    for (const group of byDay.values()) {
+      if (group.length !== 2) continue
+      const key = [...group].sort().join('|')
+      pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1)
+    }
+
+    // 45 possible pairs among 10 people, ~31 day-slots filled — a healthy
+    // spread keeps any single pair rare; without pairing-awareness the same
+    // duo reappears every time everyone's individual totals tie again.
+    expect(Math.max(...pairCounts.values())).toBeLessThanOrEqual(2)
   })
 
   it('emits understaffed violations instead of breaking constraints', () => {

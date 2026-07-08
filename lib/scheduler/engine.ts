@@ -1,6 +1,8 @@
 import { addDays, mondayOfWeek } from '@/lib/dates'
 import { addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
-import { consecutiveWorkDaysBefore, emptyStats, fairnessScore } from '@/lib/scheduler/fairness'
+import {
+  consecutiveWorkDaysBefore, emptyStats, fairnessScore, pairingPenalty, recordPairs, tieBreakHash, type PairCounts,
+} from '@/lib/scheduler/fairness'
 import { assignJobs } from '@/lib/scheduler/rotation'
 import type {
   AssignmentDraft, PersonStats, SchedulerInput, SchedulerResult, Violation,
@@ -58,6 +60,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
   }
 
   const orderedSlots = [...input.slots].sort((a, b) => a.startMin - b.startMin || a.code.localeCompare(b.code))
+  const pairCounts: PairCounts = {}
 
   for (const day of days) {
     for (const slot of orderedSlots) {
@@ -65,7 +68,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
       if (required <= 0) continue
 
       const weekDates = weekDatesByDate.get(day.date) ?? []
-      const candidates = staff
+      const pool = staff
         .filter((member) => {
           const state = persons.get(member.userId)!
           return checkAssignment(state, day.date, slot, config, weekDates).ok
@@ -75,7 +78,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
           const state = persons.get(member.userId)!
           return {
             member,
-            score: fairnessScore(
+            baseScore: fairnessScore(
               personStats,
               slot.code,
               day.dayClass,
@@ -85,13 +88,31 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
             typeCount: personStats.byType[slot.code] ?? 0,
           }
         })
-        .sort((a, b) =>
-          a.score - b.score ||
-          a.typeCount - b.typeCount ||
-          a.member.key.localeCompare(b.member.key),
-        )
 
-      const chosen = candidates.slice(0, required).map((c) => c.member)
+      // Pick one person at a time, re-scoring the remaining pool against
+      // who's already been picked for this slot — a flat single sort would
+      // keep choosing the same low-score pair together every time, since
+      // their scores rise in lockstep whenever they're picked as a group.
+      const chosenIds: string[] = []
+      const chosen: typeof input.staff = []
+      const remaining = [...pool]
+      while (chosen.length < required && remaining.length > 0) {
+        remaining.sort((a, b) => {
+          const aTotal = a.baseScore + pairingPenalty(a.member.userId, chosenIds, pairCounts, config.weights.pairing)
+          const bTotal = b.baseScore + pairingPenalty(b.member.userId, chosenIds, pairCounts, config.weights.pairing)
+          return (
+            aTotal - bTotal ||
+            a.typeCount - b.typeCount ||
+            tieBreakHash(`${day.date}|${slot.code}|${a.member.key}`) - tieBreakHash(`${day.date}|${slot.code}|${b.member.key}`) ||
+            a.member.key.localeCompare(b.member.key)
+          )
+        })
+        const picked = remaining.shift()!
+        chosen.push(picked.member)
+        chosenIds.push(picked.member.userId)
+      }
+      recordPairs(chosenIds, pairCounts)
+
       if (chosen.length < required) {
         violations.push({
           date: day.date,
