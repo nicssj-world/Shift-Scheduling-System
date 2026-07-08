@@ -143,10 +143,16 @@ export function StaffAdminView() {
               <option value="">— เลือก —</option>
               {staff
                 .filter((s) => !addTeam?.members.some((m) => m.user_id === s.id && m.is_active))
+                .filter((s) => !addTeam?.allowed_roles?.length || addTeam.allowed_roles.includes(s.role))
                 .map((s) => (
                   <option key={s.id} value={s.id}>{s.name} · {s.role} · {s.dept ?? '-'}</option>
                 ))}
             </select>
+            {Boolean(addTeam?.allowed_roles?.length) && (
+              <p className="mt-1.5 text-xs text-slate-500">
+                แสดงเฉพาะ Role: {addTeam!.allowed_roles!.join(', ')}
+              </p>
+            )}
           </Field>
           <Button
             disabled={!addUser || busy}

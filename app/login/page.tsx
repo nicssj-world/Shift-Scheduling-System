@@ -130,12 +130,12 @@ function LoginForm() {
           <div className="text-5xl mb-5">🩺</div>
           <h2 className="text-2xl font-bold mb-3">Shift Scheduling System</h2>
           <p className="text-sm/-relaxed opacity-85 leading-7">
-            ระบบจัดตารางเวรนักเทคนิคการแพทย์ออนไลน์
-            จัดเวรอัตโนมัติ · แลกเวร · บันทึกวันลา · รายงานสรุป
+            ระบบจัดตารางเวรออนไลน์ <br />
+            จัดเวรอัตโนมัติ · แลกเวร · รายงานสรุป
           </p>
           <div className="mt-7 glass rounded-2xl px-5 py-3 text-ink">
-            <div className="text-[11px] uppercase tracking-widest text-slate-500 mb-0.5">Central Lab</div>
-            <div className="text-sm font-bold">เวรเช้า · เวรบ่าย · เวรดึก</div>
+            <div className="text-[11px] uppercase tracking-widest text-slate-500 mb-0.5">MedicalTechnologist CBH</div>
+            <div className="text-sm font-bold">Central Lab · Microbiology · Bloodbank</div>
           </div>
         </div>
       </div>

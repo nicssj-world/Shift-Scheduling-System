@@ -50,6 +50,8 @@ export type Team = {
   code: string
   name_th: string
   uses_jobs: boolean
+  /** profiles.role values eligible to join this team; null/empty = no restriction */
+  allowed_roles: Role[] | null
   is_active: boolean
   sort_order: number
 }
