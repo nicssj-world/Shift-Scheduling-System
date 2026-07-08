@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-50: #f0f9ff;
+  --color-brand-100: #e0f2fe;
+  --color-brand-200: #bae6fd;
+  --color-brand-300: #7dd3fc;
+  --color-brand-400: #38bdf8;
+  --color-brand-500: #0ea5e9;
+  --color-brand-600: #0284c7;
+  --color-brand-700: #0369a1;
+  --color-brand-800: #075985;
+  --color-brand-900: #0c4a6e;
+  --color-mint-100: #d1fae5;
+  --color-mint-500: #10b981;
+  --color-mint-600: #059669;
+  --color-ink: #0f2b46;
+  --color-soft: #f0f7fc;
+  --color-line: #dbe7f0;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background:
+    radial-gradient(1200px 400px at 85% -10%, rgba(14, 165, 233, 0.10), transparent 60%),
+    radial-gradient(900px 380px at -10% 110%, rgba(16, 185, 129, 0.08), transparent 60%),
+    var(--color-soft);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* Glassmorphism card */
+.glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 6px 24px rgba(12, 74, 110, 0.08);
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(12, 74, 110, 0.06);
+}
+
+/* Roster grid: thick separators between shift groups (like the paper roster) */
+.roster-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.roster-table th,
+.roster-table td {
+  border: 1px solid #b6c9d8;
+  padding: 2px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.roster-table .shift-sep {
+  border-left: 3px solid #35506b !important;
+}
+.roster-table thead th {
+  background: #e8f3fa;
+  font-weight: 600;
+}
+.roster-table tr.holiday-row td {
+  background: #fdf1d8;
+}
+.roster-table tr.weekend-row td {
+  background: #eef3f7;
+}
+.roster-table td.mine {
+  background: #d2ecff !important;
+  font-weight: 700;
+}
+
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #b6c9d8;
+  border-radius: 8px;
+}
