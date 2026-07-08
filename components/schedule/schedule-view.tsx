@@ -41,11 +41,17 @@ export function ScheduleView({ manage }: { manage: boolean }) {
   const [bundle, setBundle] = useState<ScheduleBundle | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [violations, setViolations] = useState<Violation[]>([])
   const [mode, setMode] = useState<'grid' | 'list'>('grid')
   const [cell, setCell] = useState<RosterCell | null>(null)
   const [candidates, setCandidates] = useState<Candidate[] | null>(null)
+  // In-app confirm dialog. Never use window.confirm here: browsers can
+  // silently suppress native dialogs (after repeated dialogs / "prevent this
+  // page from creating additional dialogs"), making confirm() return false
+  // instantly — the click then does nothing, with no request and no error.
+  const [confirmBox, setConfirmBox] = useState<{ title: string; message: string; run: () => void } | null>(null)
 
   const month = searchParams.get('month') ?? bangkokMonthNow()
   const teamId = searchParams.get('team')
@@ -87,10 +93,10 @@ export function ScheduleView({ manage }: { manage: boolean }) {
     setParams({ month: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` })
   }
 
-  async function action(fn: () => Promise<unknown>, confirmText?: string) {
-    if (confirmText && !window.confirm(confirmText)) return
+  async function action(fn: () => Promise<unknown>) {
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       await fn()
       await load()
@@ -101,23 +107,29 @@ export function ScheduleView({ manage }: { manage: boolean }) {
     }
   }
 
-  async function generate() {
-    if (!schedule) return
-    if (!window.confirm('สร้างตารางอัตโนมัติจะแทนที่เวรทั้งหมดในฉบับร่างนี้ ดำเนินการต่อ?')) return
+  function askConfirm(title: string, message: string, run: () => void) {
+    setConfirmBox({ title, message, run })
+  }
+
+  async function generateNow(scheduleId: string) {
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       // Trust the generate response directly — it's the authoritative result
       // from the server, so violations are correct even if the follow-up
       // bundle refetch were ever to lag or be served stale.
       const res = await api<{ violations: Violation[]; count: number }>(
-        `/api/schedules/${schedule.id}/generate`,
+        `/api/schedules/${scheduleId}/generate`,
         { method: 'POST' },
       )
       setViolations(res.violations)
       await load()
       if (res.count === 0) {
         setError('ไม่สามารถจัดเวรได้ — ตรวจสอบว่าทีมมีสมาชิกและกำหนดจำนวนคนต่อเวรแล้ว')
+      } else {
+        const errors = res.violations.filter((v) => v.severity === 'error').length
+        setNotice(`จัดเวรอัตโนมัติสำเร็จ ${res.count} เวร${errors > 0 ? ` (มีข้อควรแก้ไข ${errors} จุด)` : ' ไม่มีข้อผิดพลาด'}`)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'สร้างตารางไม่สำเร็จ')
@@ -253,6 +265,11 @@ export function ScheduleView({ manage }: { manage: boolean }) {
       </Card>
 
       <ErrorNote error={error} />
+      {notice && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] font-semibold text-emerald-700">
+          ✓ {notice}
+        </div>
+      )}
 
       {/* manage toolbar */}
       {manage && bundle?.canManage && (
@@ -267,15 +284,23 @@ export function ScheduleView({ manage }: { manage: boolean }) {
           )}
           {schedule && schedule.status === 'draft' && (
             <>
-              <Button disabled={busy} onClick={generate}>
-                <Sparkles size={15} /> สร้างตารางอัตโนมัติ
+              <Button
+                disabled={busy}
+                onClick={() => askConfirm(
+                  'สร้างตารางอัตโนมัติ',
+                  'ระบบจะจัดเวรใหม่ทั้งเดือนและแทนที่เวรทั้งหมดในฉบับร่างนี้ ดำเนินการต่อ?',
+                  () => generateNow(schedule.id),
+                )}
+              >
+                <Sparkles size={15} /> {busy ? 'กำลังจัดเวร…' : 'สร้างตารางอัตโนมัติ'}
               </Button>
               <Button
                 variant="success"
                 disabled={busy}
-                onClick={() => action(
-                  () => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'publish' }) }),
+                onClick={() => askConfirm(
+                  'เผยแพร่ตารางเวร',
                   errorCount > 0 ? `ยังมีข้อผิดพลาด ${errorCount} จุด ต้องการเผยแพร่หรือไม่?` : 'เผยแพร่ตารางเวรให้ทุกคนเห็น?',
+                  () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'publish' }) })),
                 )}
               >
                 <Send size={15} /> เผยแพร่
@@ -283,9 +308,10 @@ export function ScheduleView({ manage }: { manage: boolean }) {
               <Button
                 variant="danger"
                 disabled={busy}
-                onClick={() => action(
-                  () => api(`/api/schedules/${schedule.id}`, { method: 'DELETE' }),
+                onClick={() => askConfirm(
+                  'ลบฉบับร่าง',
                   'ลบตารางฉบับร่างนี้ทั้งหมด?',
+                  () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'DELETE' })),
                 )}
               >
                 <Trash2 size={15} /> ลบฉบับร่าง
@@ -297,9 +323,10 @@ export function ScheduleView({ manage }: { manage: boolean }) {
               <Button
                 variant="danger"
                 disabled={busy}
-                onClick={() => action(
-                  () => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'lock' }) }),
+                onClick={() => askConfirm(
+                  'ล็อคตารางเวร',
                   'ล็อคตารางเวรเดือนนี้? เมื่อล็อคแล้วจะไม่สามารถแก้ไขหรือแลกเวรได้อีก',
+                  () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'lock' }) })),
                 )}
               >
                 <Lock size={15} /> ล็อคตาราง
@@ -307,9 +334,10 @@ export function ScheduleView({ manage }: { manage: boolean }) {
               <Button
                 variant="outline"
                 disabled={busy}
-                onClick={() => action(
-                  () => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'unpublish' }) }),
+                onClick={() => askConfirm(
+                  'กลับเป็นฉบับร่าง',
                   'ยกเลิกการเผยแพร่และกลับเป็นฉบับร่าง?',
+                  () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'unpublish' }) })),
                 )}
               >
                 กลับเป็นฉบับร่าง
@@ -320,9 +348,10 @@ export function ScheduleView({ manage }: { manage: boolean }) {
             <Button
               variant="outline"
               disabled={busy}
-              onClick={() => action(
-                () => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'unlock' }) }),
-                'ปลดล็อคตารางเวร? (เฉพาะ Admin)',
+              onClick={() => askConfirm(
+                'ปลดล็อคตารางเวร',
+                'ปลดล็อคตารางเวรเพื่อกลับมาแก้ไข/แลกเวรได้? (เฉพาะ Admin)',
+                () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'unlock' }) })),
               )}
             >
               <LockOpen size={15} /> ปลดล็อค
@@ -453,6 +482,27 @@ export function ScheduleView({ manage }: { manage: boolean }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* in-app confirm (replaces window.confirm — cannot be suppressed by the browser) */}
+      <Modal open={Boolean(confirmBox)} onClose={() => setConfirmBox(null)} title={confirmBox?.title ?? ''}>
+        {confirmBox && (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-slate-600">{confirmBox.message}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmBox(null)}>ยกเลิก</Button>
+              <Button
+                onClick={() => {
+                  const run = confirmBox.run
+                  setConfirmBox(null)
+                  run()
+                }}
+              >
+                ยืนยัน
+              </Button>
+            </div>
           </div>
         )}
       </Modal>
