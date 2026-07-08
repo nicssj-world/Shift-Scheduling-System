@@ -19,23 +19,28 @@ function LoginForm() {
     setError(null)
     setLoading(true)
 
-    clearStaleAuthSession()
-    const supabase = createClient()
-    const loginEmail = ephis.includes('@') ? ephis : `${ephis.trim()}@cbh.go.th`
-    const { error } = await supabase.auth
-      .signInWithPassword({ email: loginEmail, password })
-      .catch(() => ({ error: { message: 'Failed to fetch' } }))
+    try {
+      clearStaleAuthSession()
+      const supabase = createClient()
+      const loginEmail = ephis.includes('@') ? ephis : `${ephis.trim()}@cbh.go.th`
+      const { error } = await supabase.auth
+        .signInWithPassword({ email: loginEmail, password })
+        .catch(() => ({ error: { message: 'Failed to fetch' } }))
 
-    if (error) {
-      if (error.message === 'Failed to fetch') clearStaleAuthSession()
-      setError('รหัส E-Phis หรือรหัสผ่านไม่ถูกต้อง')
+      if (error) {
+        if (error.message === 'Failed to fetch') clearStaleAuthSession()
+        setError('รหัส E-Phis หรือรหัสผ่านไม่ถูกต้อง')
+        setLoading(false)
+        return
+      }
+
+      const next = searchParams.get('next')
+      router.push(next && next.startsWith('/') ? next : '/schedule')
+      router.refresh()
+    } catch {
+      setError('ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง')
       setLoading(false)
-      return
     }
-
-    const next = searchParams.get('next')
-    router.push(next && next.startsWith('/') ? next : '/schedule')
-    router.refresh()
   }
 
   return (
