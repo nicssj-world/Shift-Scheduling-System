@@ -232,21 +232,22 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   const typeCodeById = new Map(shiftTypes.map((t) => [t.id, t.code]))
   const jobCodeById = new Map(jobs.map((j) => [j.id, j.code]))
 
-  const [{ data: otherSchedules }, { data: prevSchedule }] = await Promise.all([
-    admin().from('shift_schedules').select('id').eq('team_id', teamId).neq('month', `${month}-01`),
+  // Aggregated in Postgres (see shift_lifetime_totals in
+  // 202607080003_shift_lifetime_totals_fn.sql) so this stays a flat, cheap
+  // query — ~one row per team member — no matter how many months of history
+  // pile up, instead of fetching every historical assignment row and summing
+  // them in JS.
+  const [{ data: totalsRows, error: totalsError }, { data: prevSchedule }] = await Promise.all([
+    admin().rpc('shift_lifetime_totals', { p_team_id: teamId, p_exclude_month: `${month}-01` }),
     admin().from('shift_schedules').select('id').eq('team_id', teamId).eq('month', `${prevMonth}-01`).maybeSingle(),
   ])
+  // Degrade to "no lifetime history" instead of breaking generate entirely if
+  // the migration adding this function hasn't been run yet.
+  if (totalsError) console.error('shift_lifetime_totals RPC failed (migration applied?):', totalsError.message)
 
   const totalCounts: Record<string, number> = {}
-  const otherScheduleIds = (otherSchedules ?? []).map((s) => String(s.id))
-  if (otherScheduleIds.length > 0) {
-    const { data: allRows, error } = await admin()
-      .from('shift_assignments').select('user_id').in('schedule_id', otherScheduleIds)
-    if (error) throw new HttpError(500, error.message)
-    for (const row of allRows ?? []) {
-      const userId = String(row.user_id)
-      totalCounts[userId] = (totalCounts[userId] ?? 0) + 1
-    }
+  for (const row of (totalsRows ?? []) as { user_id: string; total: number }[]) {
+    totalCounts[String(row.user_id)] = Number(row.total)
   }
 
   if (!prevSchedule) return { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts }
