@@ -101,6 +101,31 @@ export function ScheduleView({ manage }: { manage: boolean }) {
     }
   }
 
+  async function generate() {
+    if (!schedule) return
+    if (!window.confirm('สร้างตารางอัตโนมัติจะแทนที่เวรทั้งหมดในฉบับร่างนี้ ดำเนินการต่อ?')) return
+    setBusy(true)
+    setError(null)
+    try {
+      // Trust the generate response directly — it's the authoritative result
+      // from the server, so violations are correct even if the follow-up
+      // bundle refetch were ever to lag or be served stale.
+      const res = await api<{ violations: Violation[]; count: number }>(
+        `/api/schedules/${schedule.id}/generate`,
+        { method: 'POST' },
+      )
+      setViolations(res.violations)
+      await load()
+      if (res.count === 0) {
+        setError('ไม่สามารถจัดเวรได้ — ตรวจสอบว่าทีมมีสมาชิกและกำหนดจำนวนคนต่อเวรแล้ว')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'สร้างตารางไม่สำเร็จ')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function openCell(c: RosterCell) {
     if (!bundle?.schedule || bundle.schedule.status === 'locked') return
     setCell(c)
@@ -242,13 +267,7 @@ export function ScheduleView({ manage }: { manage: boolean }) {
           )}
           {schedule && schedule.status === 'draft' && (
             <>
-              <Button
-                disabled={busy}
-                onClick={() => action(
-                  () => api(`/api/schedules/${schedule.id}/generate`, { method: 'POST' }),
-                  'สร้างตารางอัตโนมัติจะแทนที่เวรทั้งหมดในฉบับร่างนี้ ดำเนินการต่อ?',
-                )}
-              >
+              <Button disabled={busy} onClick={generate}>
                 <Sparkles size={15} /> สร้างตารางอัตโนมัติ
               </Button>
               <Button
