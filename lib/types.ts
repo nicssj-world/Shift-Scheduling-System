@@ -15,6 +15,21 @@ export type Role = (typeof ROLES)[number]
  *  picker so it doesn't offer irrelevant choices. */
 export const TEAM_ELIGIBLE_ROLES = ['Admin', 'Manager', 'Medical Technologist', 'Medical Science Technician', 'Assistant'] as const
 
+/** Canonical profiles.dept values from the shared portal database. */
+export const DEPARTMENTS = [
+  'สำนักงานกลุ่มงานเทคนิคการแพทย์',
+  'งานเคมีคลินิก',
+  'งานโลหิตวิทยาคลินิก',
+  'งานภูมิคุ้มกันวิทยาคลินิก',
+  'งานจุลทรรศนศาสตร์คลินิก',
+  'งานอณูชีววิทยา',
+  'งานจุลชีววิทยา',
+  'งานคลังเลือด',
+  'งานตรวจพิเศษและห้องปฏิบัติการตรวจต่อ',
+  'งานบริการผู้ป่วยนอก',
+  'ห้องปฏิบัติการศูนย์สุขภาพชุมชนเมืองชลบุรี',
+] as const
+
 /** Map legacy lowercase roles still present in the shared profiles table. */
 const LEGACY_ROLES: Record<string, Role> = {
   admin: 'Admin',
@@ -58,6 +73,8 @@ export type Team = {
   uses_jobs: boolean
   /** profiles.role values eligible to join this team; null/empty = no restriction */
   allowed_roles: Role[] | null
+  /** profiles.dept values eligible to join this team; null/empty = no restriction */
+  allowed_depts: string[] | null
   is_active: boolean
   sort_order: number
 }

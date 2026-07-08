@@ -4,7 +4,7 @@ import { getJobs, getRequirements, getShiftTypes, getTeamMembers, getTeams } fro
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { TEAM_ELIGIBLE_ROLES } from '@/lib/types'
+import { DEPARTMENTS, TEAM_ELIGIBLE_ROLES } from '@/lib/types'
 
 export async function GET() {
   return respond(async () => {
@@ -29,6 +29,7 @@ const upsertSchema = z.object({
   nameTh: z.string().min(1).max(80),
   usesJobs: z.boolean().default(false),
   allowedRoles: z.array(z.enum(TEAM_ELIGIBLE_ROLES)).default([]),
+  allowedDepts: z.array(z.enum(DEPARTMENTS)).default([]),
   isActive: z.boolean().default(true),
   sortOrder: z.number().int().default(0),
 })
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
       name_th: body.nameTh,
       uses_jobs: body.usesJobs,
       allowed_roles: body.allowedRoles.length > 0 ? body.allowedRoles : null,
+      allowed_depts: body.allowedDepts.length > 0 ? body.allowedDepts : null,
       is_active: body.isActive,
       sort_order: body.sortOrder,
     }

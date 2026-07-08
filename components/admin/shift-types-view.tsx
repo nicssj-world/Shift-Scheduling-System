@@ -5,10 +5,10 @@ import { Pencil, Plus, Save } from 'lucide-react'
 import { Badge, Button, Card, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import { thaiTime } from '@/lib/dates'
-import { TEAM_ELIGIBLE_ROLES, type DayClass, type Job, type Requirement, type Role, type ShiftType, type Team } from '@/lib/types'
+import { DEPARTMENTS, TEAM_ELIGIBLE_ROLES, type DayClass, type Job, type Requirement, type Role, type ShiftType, type Team } from '@/lib/types'
 
 type TeamBundle = Team & { jobs: Job[] }
-type TeamDraft = Partial<Team> & { allowed_roles?: Role[] | null }
+type TeamDraft = Partial<Team> & { allowed_roles?: Role[] | null; allowed_depts?: string[] | null }
 
 const DAY_CLASS_TH: Record<DayClass, string> = { weekday: 'จันทร์-ศุกร์', weekend: 'เสาร์-อาทิตย์', holiday: 'วันหยุดพิเศษ' }
 
@@ -83,6 +83,7 @@ export function ShiftTypesView() {
           nameTh: editTeam.name_th,
           usesJobs: editTeam.uses_jobs ?? false,
           allowedRoles: editTeam.allowed_roles ?? [],
+          allowedDepts: editTeam.allowed_depts ?? [],
           isActive: editTeam.is_active ?? true,
           sortOrder: Number(editTeam.sort_order ?? teams.length + 1),
         }),
@@ -102,6 +103,15 @@ export function ShiftTypesView() {
       const current = prev.allowed_roles ?? []
       const next = current.includes(role) ? current.filter((r) => r !== role) : [...current, role]
       return { ...prev, allowed_roles: next }
+    })
+  }
+
+  function toggleAllowedDept(dept: string) {
+    setEditTeam((prev) => {
+      if (!prev) return prev
+      const current = prev.allowed_depts ?? []
+      const next = current.includes(dept) ? current.filter((d) => d !== dept) : [...current, dept]
+      return { ...prev, allowed_depts: next }
     })
   }
 
@@ -167,7 +177,7 @@ export function ShiftTypesView() {
           <div className="flex gap-2">
             <Button
               size="sm" variant="outline" disabled={busy}
-              onClick={() => setEditTeam({ uses_jobs: false, allowed_roles: [], is_active: true, sort_order: teams.length + 1 })}
+              onClick={() => setEditTeam({ uses_jobs: false, allowed_roles: [], allowed_depts: [], is_active: true, sort_order: teams.length + 1 })}
             >
               <Plus size={14} /> เพิ่มตารางเวร
             </Button>
@@ -297,6 +307,25 @@ export function ShiftTypesView() {
                       }`}
                     >
                       {role}
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+            <Field label="แผนกที่เพิ่มเข้าทีมนี้ได้ (ไม่เลือก = ไม่จำกัด)">
+              <div className="flex flex-wrap gap-2">
+                {DEPARTMENTS.map((dept) => {
+                  const checked = (editTeam.allowed_depts ?? []).includes(dept)
+                  return (
+                    <button
+                      key={dept}
+                      type="button"
+                      onClick={() => toggleAllowedDept(dept)}
+                      className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                        checked ? 'border-brand-600 bg-brand-600 text-white' : 'border-line bg-white text-slate-600'
+                      }`}
+                    >
+                      {dept}
                     </button>
                   )
                 })}

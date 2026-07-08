@@ -144,13 +144,16 @@ export function StaffAdminView() {
               {staff
                 .filter((s) => !addTeam?.members.some((m) => m.user_id === s.id && m.is_active))
                 .filter((s) => !addTeam?.allowed_roles?.length || addTeam.allowed_roles.includes(s.role))
+                .filter((s) => !addTeam?.allowed_depts?.length || (s.dept && addTeam.allowed_depts.includes(s.dept)))
                 .map((s) => (
                   <option key={s.id} value={s.id}>{s.name} · {s.role} · {s.dept ?? '-'}</option>
                 ))}
             </select>
-            {Boolean(addTeam?.allowed_roles?.length) && (
+            {Boolean(addTeam?.allowed_roles?.length || addTeam?.allowed_depts?.length) && (
               <p className="mt-1.5 text-xs text-slate-500">
-                แสดงเฉพาะ Role: {addTeam!.allowed_roles!.join(', ')}
+                {addTeam?.allowed_roles?.length ? `Role: ${addTeam.allowed_roles.join(', ')}` : ''}
+                {addTeam?.allowed_roles?.length && addTeam?.allowed_depts?.length ? ' · ' : ''}
+                {addTeam?.allowed_depts?.length ? `แผนก: ${addTeam.allowed_depts.join(', ')}` : ''}
               </p>
             )}
           </Field>
