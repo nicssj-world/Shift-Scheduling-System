@@ -5,7 +5,7 @@ import { Pencil, Plus, Save } from 'lucide-react'
 import { Badge, Button, Card, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import { thaiTime } from '@/lib/dates'
-import { ROLES, type DayClass, type Job, type Requirement, type Role, type ShiftType, type Team } from '@/lib/types'
+import { TEAM_ELIGIBLE_ROLES, type DayClass, type Job, type Requirement, type Role, type ShiftType, type Team } from '@/lib/types'
 
 type TeamBundle = Team & { jobs: Job[] }
 type TeamDraft = Partial<Team> & { allowed_roles?: Role[] | null }
@@ -285,7 +285,7 @@ export function ShiftTypesView() {
             </label>
             <Field label="Role ที่เพิ่มเข้าทีมนี้ได้ (ไม่เลือก = ไม่จำกัด)">
               <div className="flex flex-wrap gap-2">
-                {ROLES.map((role) => {
+                {TEAM_ELIGIBLE_ROLES.map((role) => {
                   const checked = (editTeam.allowed_roles ?? []).includes(role)
                   return (
                     <button

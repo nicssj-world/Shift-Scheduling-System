@@ -4,7 +4,7 @@ import { getJobs, getRequirements, getShiftTypes, getTeamMembers, getTeams } fro
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { ROLES } from '@/lib/types'
+import { TEAM_ELIGIBLE_ROLES } from '@/lib/types'
 
 export async function GET() {
   return respond(async () => {
@@ -28,7 +28,7 @@ const upsertSchema = z.object({
   code: z.string().min(1).max(30).regex(/^[A-Za-z0-9_]+$/, 'ใช้ตัวอักษรอังกฤษ ตัวเลข และ _ เท่านั้น'),
   nameTh: z.string().min(1).max(80),
   usesJobs: z.boolean().default(false),
-  allowedRoles: z.array(z.enum(ROLES)).default([]),
+  allowedRoles: z.array(z.enum(TEAM_ELIGIBLE_ROLES)).default([]),
   isActive: z.boolean().default(true),
   sortOrder: z.number().int().default(0),
 })

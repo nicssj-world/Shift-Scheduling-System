@@ -8,7 +8,7 @@
 alter table public.shift_teams
   add column if not exists allowed_roles text[];
 
-update public.shift_teams set allowed_roles = array['Medical Technologist','Medical Science Technician','Manager']
+update public.shift_teams set allowed_roles = array['Medical Technologist','Medical Science Technician','Manager','Admin']
   where code = 'MT_CENTRAL';
 update public.shift_teams set allowed_roles = array['Assistant']
   where code = 'AST_CENTRAL';

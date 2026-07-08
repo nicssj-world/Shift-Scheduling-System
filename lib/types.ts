@@ -9,6 +9,12 @@ export const ROLES = [
 
 export type Role = (typeof ROLES)[number]
 
+/** Roles that can realistically staff a shift-scheduling team (excludes
+ *  'Document Controller' — that's a document-management role in the
+ *  portal, unrelated to lab-bench/shift work). Used for the allowed_roles
+ *  picker so it doesn't offer irrelevant choices. */
+export const TEAM_ELIGIBLE_ROLES = ['Admin', 'Manager', 'Medical Technologist', 'Medical Science Technician', 'Assistant'] as const
+
 /** Map legacy lowercase roles still present in the shared profiles table. */
 const LEGACY_ROLES: Record<string, Role> = {
   admin: 'Admin',
