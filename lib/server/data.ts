@@ -152,14 +152,19 @@ export async function getAssignments(scheduleId: string): Promise<Record<string,
 }
 
 // ---------- day classification + scheduler input ----------
-export async function buildDays(month: string): Promise<DayInfo[]> {
-  const dates = datesOfMonth(month)
-  const holidays = await getHolidays(dates[0], dates[dates.length - 1])
+/** Pure — classify already-fetched dates/holidays without another round trip. */
+export function classifyDays(dates: string[], holidays: Holiday[]): DayInfo[] {
   const holidaySet = new Set(holidays.map((h) => h.holiday_date))
   return dates.map((date) => ({
     date,
     dayClass: (holidaySet.has(date) ? 'holiday' : isWeekend(date) ? 'weekend' : 'weekday') as DayClass,
   }))
+}
+
+export async function buildDays(month: string): Promise<DayInfo[]> {
+  const dates = datesOfMonth(month)
+  const holidays = await getHolidays(dates[0], dates[dates.length - 1])
+  return classifyDays(dates, holidays)
 }
 
 export function buildSlots(shiftTypes: ShiftType[], requirements: Requirement[]): SlotDef[] {

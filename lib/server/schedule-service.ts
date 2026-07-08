@@ -7,8 +7,8 @@ import { consecutiveWorkDaysBefore, emptyStats, fairnessScore } from '@/lib/sche
 import type { AssignmentDraft, SchedulerInput, Violation } from '@/lib/scheduler/types'
 import { validateAssignments } from '@/lib/scheduler/validate'
 import {
-  buildCarryIn, buildDays, buildSlots, getAssignments, getHolidays, getJobs, getRequirements,
-  getSchedule, getSchedulerConfig, getShiftTypes, getTeam, getTeamMembers, getTeams,
+  buildCarryIn, buildDays, buildSlots, classifyDays, getAssignments, getHolidays, getJobs, getRequirements,
+  getSchedule, getSchedulerConfig, getShiftTypes, getTeam, getTeamMembers, getTeams, getUnavailableDates,
   type MemberWithProfile,
 } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
@@ -41,16 +41,20 @@ export async function loadScheduleContext(scheduleId: string): Promise<ScheduleC
   const schedule = await getSchedule(scheduleId)
   const month = String(schedule.month).slice(0, 7)
   const teamId = schedule.team_id
-  const [shiftTypes, requirements, jobs, days, members, config] = await Promise.all([
-    getShiftTypes(), getRequirements(teamId), getJobs(teamId), buildDays(month),
+  const dates = datesOfMonth(month)
+
+  const [shiftTypes, requirements, jobs, holidays, members, config] = await Promise.all([
+    getShiftTypes(), getRequirements(teamId), getJobs(teamId),
+    getHolidays(dates[0], dates[dates.length - 1]),
     getTeamMembers(teamId), getSchedulerConfig(),
   ])
-  const dates = datesOfMonth(month)
-  const { getUnavailableDates } = await import('@/lib/server/data')
-  const unavailable = await getUnavailableDates(
-    members.map((m) => m.user_id), dates[0], dates[dates.length - 1],
-  )
-  const carryIn = await buildCarryIn(teamId, month, shiftTypes, jobs)
+  const days = classifyDays(dates, holidays)
+
+  const [unavailable, carryIn] = await Promise.all([
+    getUnavailableDates(members.map((m) => m.user_id), dates[0], dates[dates.length - 1]),
+    buildCarryIn(teamId, month, shiftTypes, jobs),
+  ])
+
   return {
     schedule: schedule as Schedule, teamId, month, members,
     slots: buildSlots(shiftTypes, requirements), days, unavailable, carryIn, config, jobs, shiftTypes,
@@ -172,7 +176,9 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
   }).sort((a, b) => Number(b.ok) - Number(a.ok) || a.score - b.score || a.displayName.localeCompare(b.displayName))
 }
 
-/** Full bundle for the roster views. */
+/** Full bundle for the roster views. Fetches everything for one team/month
+ *  in a single parallel batch — the Supabase project lives in a different
+ *  region from the app, so each extra sequential round trip is expensive. */
 export async function getScheduleBundle(month: string, teamId: string | null, actor: Actor) {
   assertMonth(month)
   const teams = await getTeams()
@@ -180,19 +186,20 @@ export async function getScheduleBundle(month: string, teamId: string | null, ac
   const team = (teamId ? activeTeams.find((t) => t.id === teamId) : activeTeams[0]) ?? activeTeams[0]
   if (!team) throw new HttpError(404, 'ยังไม่มีทีม')
 
-  const [shiftTypes, requirements, jobs, days, members] = await Promise.all([
-    getShiftTypes(), getRequirements(team.id), getJobs(team.id), buildDays(month), getTeamMembers(team.id),
-  ])
   const dates = datesOfMonth(month)
-  const holidays = await getHolidays(dates[0], dates[dates.length - 1])
-
   const admin = getAdminClient()
-  const { data: scheduleRow } = await admin
-    .from('shift_schedules').select('*')
-    .eq('team_id', team.id).eq('month', `${month}-01`)
-    .maybeSingle()
 
-  let schedule = scheduleRow as unknown as Schedule | null
+  const [shiftTypes, requirements, jobs, holidays, members, scheduleResult] = await Promise.all([
+    getShiftTypes(),
+    getRequirements(team.id),
+    getJobs(team.id),
+    getHolidays(dates[0], dates[dates.length - 1]),
+    getTeamMembers(team.id),
+    admin.from('shift_schedules').select('*').eq('team_id', team.id).eq('month', `${month}-01`).maybeSingle(),
+  ])
+  const days = classifyDays(dates, holidays)
+
+  let schedule = scheduleResult.data as unknown as Schedule | null
   if (schedule && schedule.status === 'draft' && !actor.isScheduler) schedule = null
 
   const assignments = schedule ? ((await getAssignments(schedule.id)) as unknown as Assignment[]) : []
