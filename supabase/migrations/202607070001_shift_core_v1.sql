@@ -5,32 +5,6 @@
 -- NEVER alters profiles or its RLS. Run in Supabase SQL editor.
 -- ============================================================
 
--- ---------- Helper predicates (security definer so policies do
--- ---------- not depend on profiles RLS) ----------
-create or replace function public.shift_is_admin() returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from profiles
-    where id = auth.uid() and (role = 'Admin' or lower(role) = 'admin')
-  );
-$$;
-
-create or replace function public.shift_is_manager() returns boolean
-language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from profiles
-    where id = auth.uid()
-      and (role in ('Admin','Manager') or lower(role) in ('admin','staff'))
-  );
-$$;
-
-create or replace function public.shift_is_scheduler() returns boolean
-language sql stable security definer set search_path = public as $$
-  select public.shift_is_manager() or exists (
-    select 1 from shift_schedulers where user_id = auth.uid()
-  );
-$$;
-
 -- ---------- 1) Teams (rosters) ----------
 create table if not exists public.shift_teams (
   id uuid primary key default gen_random_uuid(),
@@ -213,6 +187,34 @@ create table if not exists public.shift_settings (
   updated_by uuid references public.profiles(id),
   updated_at timestamptz not null default now()
 );
+
+-- ---------- Helper predicates (security definer so policies do
+-- ---------- not depend on profiles RLS). Defined after all tables
+-- ---------- exist because SQL-language functions are validated
+-- ---------- against the catalog at CREATE time. ----------
+create or replace function public.shift_is_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles
+    where id = auth.uid() and (role = 'Admin' or lower(role) = 'admin')
+  );
+$$;
+
+create or replace function public.shift_is_manager() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles
+    where id = auth.uid()
+      and (role in ('Admin','Manager') or lower(role) in ('admin','staff'))
+  );
+$$;
+
+create or replace function public.shift_is_scheduler() returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.shift_is_manager() or exists (
+    select 1 from shift_schedulers where user_id = auth.uid()
+  );
+$$;
 
 -- ============================================================
 -- RLS (defense-in-depth; the app reads/writes via service role)
