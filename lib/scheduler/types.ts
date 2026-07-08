@@ -51,10 +51,15 @@ export type JobIn = { id: string; code: string; sortOrder: number }
 export type CarryIn = {
   /** userId → assignments near the month boundary: [{date, code}] */
   assignments: Record<string, { date: string; code: string }[]>
-  /** userId → shift type code → historical count */
+  /** userId → shift type code → historical count (previous month only) */
   shiftTypeCounts: Record<string, Record<string, number>>
-  /** userId → job code → historical count */
+  /** userId → job code → historical count (previous month only) */
   jobCounts: Record<string, Record<string, number>>
+  /** userId → total shifts ever worked on this team, across all prior
+   *  months. Seeds fairness scoring so someone who got the "extra" shift
+   *  one month is deprioritized in later months instead of staying stuck
+   *  with it — the odd shift rotates through everyone over time. */
+  totalCounts: Record<string, number>
 }
 
 export type SchedulerInput = {
@@ -99,4 +104,4 @@ export type SchedulerResult = {
   stats: Record<string, PersonStats>
 }
 
-export const EMPTY_CARRY_IN: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {} }
+export const EMPTY_CARRY_IN: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts: {} }

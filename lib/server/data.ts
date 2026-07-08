@@ -217,22 +217,45 @@ export async function getUnavailableDates(userIds: string[], from: string, to: s
   return result
 }
 
-/** Previous-month assignments for boundary constraints + fairness carry-in. */
+/**
+ * Carry-in for fairness across months:
+ * - totalCounts: lifetime shift count per person across EVERY prior schedule
+ *   for this team (any month) — so whoever got the "extra" shift one month
+ *   is deprioritized afterward instead of staying stuck with it forever;
+ *   the odd shift rotates through everyone as history accumulates.
+ * - shiftTypeCounts / jobCounts / assignments: previous-month-only data used
+ *   for shift-type/job rotation smoothing and boundary rest/contiguity
+ *   constraints across the month edge.
+ */
 export async function buildCarryIn(teamId: string, month: string, shiftTypes: ShiftType[], jobs: Job[]): Promise<CarryIn> {
   const prevMonth = previousMonth(month)
-  const { data: prevSchedule } = await admin()
-    .from('shift_schedules').select('id')
-    .eq('team_id', teamId).eq('month', `${prevMonth}-01`)
-    .maybeSingle()
-  if (!prevSchedule) return { assignments: {}, shiftTypeCounts: {}, jobCounts: {} }
-
-  const rows = await getAssignments(String(prevSchedule.id))
   const typeCodeById = new Map(shiftTypes.map((t) => [t.id, t.code]))
   const jobCodeById = new Map(jobs.map((j) => [j.id, j.code]))
+
+  const [{ data: otherSchedules }, { data: prevSchedule }] = await Promise.all([
+    admin().from('shift_schedules').select('id').eq('team_id', teamId).neq('month', `${month}-01`),
+    admin().from('shift_schedules').select('id').eq('team_id', teamId).eq('month', `${prevMonth}-01`).maybeSingle(),
+  ])
+
+  const totalCounts: Record<string, number> = {}
+  const otherScheduleIds = (otherSchedules ?? []).map((s) => String(s.id))
+  if (otherScheduleIds.length > 0) {
+    const { data: allRows, error } = await admin()
+      .from('shift_assignments').select('user_id').in('schedule_id', otherScheduleIds)
+    if (error) throw new HttpError(500, error.message)
+    for (const row of allRows ?? []) {
+      const userId = String(row.user_id)
+      totalCounts[userId] = (totalCounts[userId] ?? 0) + 1
+    }
+  }
+
+  if (!prevSchedule) return { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts }
+
+  const rows = await getAssignments(String(prevSchedule.id))
   const prevDates = datesOfMonth(prevMonth)
   const boundary = new Set(prevDates.slice(-3))
 
-  const carry: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {} }
+  const carry: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts }
   for (const row of rows) {
     const userId = String(row.user_id)
     const code = typeCodeById.get(String(row.shift_type_id))

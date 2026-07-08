@@ -5,16 +5,24 @@ export function emptyStats(): PersonStats {
   return { total: 0, byType: {}, weekendHoliday: 0, byJob: {} }
 }
 
-/** Lower is better. Deterministic — no randomness anywhere. */
+/**
+ * Lower is better. Deterministic — no randomness anywhere.
+ * `carryTotal` is the person's lifetime shift count on this team from all
+ * prior months (see CarryIn.totalCounts) — folding it into the total-shifts
+ * term is what makes the "extra" shift rotate through everyone over time
+ * instead of sticking with whoever drew it first. `stats.total` itself stays
+ * scoped to the current run so callers can still report "shifts this month".
+ */
 export function fairnessScore(
   stats: PersonStats,
   code: string,
   dayClass: DayClass,
   consecutiveBefore: number,
   weights: SchedulerWeights,
+  carryTotal = 0,
 ): number {
   return (
-    weights.total * stats.total +
+    weights.total * (stats.total + carryTotal) +
     weights.type * (stats.byType[code] ?? 0) +
     (dayClass !== 'weekday' ? weights.weekend * stats.weekendHoliday : 0) +
     weights.consecutive * consecutiveBefore

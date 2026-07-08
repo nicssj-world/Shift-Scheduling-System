@@ -84,12 +84,38 @@ describe('generateSchedule', () => {
         assignments: { u01: [{ date: '2026-07-31', code: 'A' }] },
         shiftTypeCounts: {},
         jobCounts: {},
+        totalCounts: {},
       },
     })
     const result = generateSchedule(input)
     // u01 worked A on 31 Jul → cannot take N on 1 Aug (contiguous double, toggle off)
     const bad = result.assignments.filter((a) => a.userId === 'u01' && a.date === '2026-08-01' && a.code === 'N')
     expect(bad).toEqual([])
+  })
+
+  it('deprioritizes whoever already has more lifetime shifts carried in from prior months', () => {
+    // Same scenario the user described: last month one person ended up with
+    // an extra shift versus everyone else. This month, carry-in totals
+    // should make the scheduler favor catching everyone else up rather than
+    // giving the same person the "extra" shift again.
+    const staff = makeStaff(6)
+    const totalCounts = Object.fromEntries(staff.map((s) => [s.userId, 9]))
+    totalCounts['u01'] = 10 // u01 was the "extra" person last month
+    const slot = {
+      shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      requiredByDayClass: { weekday: 5, weekend: 5, holiday: 5 } as const, // 5 of 6 picked daily
+    }
+    const input = baseInput({
+      staff, slots: [slot], days: makeDays('2026-08'),
+      carryIn: { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts },
+    })
+    const result = generateSchedule(input)
+
+    // u01 entered the month already ahead — the fix should give them the
+    // FEWEST new shifts this month (ideally none, to let the others catch up).
+    const u01Total = result.stats['u01'].total
+    const othersMin = Math.min(...staff.filter((s) => s.userId !== 'u01').map((s) => result.stats[s.userId].total))
+    expect(u01Total).toBeLessThanOrEqual(othersMin)
   })
 
   it('rotates the four jobs evenly', () => {

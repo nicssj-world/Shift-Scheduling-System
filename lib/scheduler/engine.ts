@@ -84,6 +84,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
               day.dayClass,
               consecutiveWorkDaysBefore(state.workDates, day.date),
               config.weights,
+              input.carryIn.totalCounts[member.userId] ?? 0,
             ),
             typeCount: personStats.byType[slot.code] ?? 0,
           }
