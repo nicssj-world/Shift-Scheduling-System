@@ -5,7 +5,7 @@ import { Coins, Plus } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
-import { thaiShortDate } from '@/lib/dates'
+import { bangkokMonthNow, thaiShortDate } from '@/lib/dates'
 import { SALE_STATUS_TH, type SaleStatus } from '@/lib/types'
 
 type SaleRow = {
@@ -46,8 +46,8 @@ export function SalesView() {
   const [buyerId, setBuyerId] = useState('')
   const [reason, setReason] = useState('')
 
-  const [fromMonth, setFromMonth] = useState('')
-  const [toMonth, setToMonth] = useState('')
+  const [fromMonth, setFromMonth] = useState(bangkokMonthNow())
+  const [toMonth, setToMonth] = useState(bangkokMonthNow())
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const pageSize = 20
@@ -76,8 +76,8 @@ export function SalesView() {
   useEffect(() => { load() }, [load])
 
   function clearFilter() {
-    setFromMonth('')
-    setToMonth('')
+    setFromMonth(bangkokMonthNow())
+    setToMonth(bangkokMonthNow())
     setPage(1)
   }
 
