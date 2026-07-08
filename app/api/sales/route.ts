@@ -3,9 +3,11 @@ import { requireActor } from '@/lib/server/auth'
 import { getShiftTypes } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
+import { parseHistoryFilter } from '@/lib/server/pagination'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
 import { thaiShortDate } from '@/lib/dates'
+import type { Actor } from '@/lib/types'
 
 async function joinSaleDetails(rows: Record<string, unknown>[]) {
   const admin = getAdminClient()
@@ -51,17 +53,48 @@ async function joinSaleDetails(rows: Record<string, unknown>[]) {
   })
 }
 
-export async function GET() {
+/** Pending items needing MY action (respond / approve) — always fetched in
+ *  full, never paginated or date-filtered, so they can't be hidden by the
+ *  history filter/pager. */
+async function getActionableSales(actor: Actor) {
+  const admin = getAdminClient()
+  const conditions = [`and(status.eq.pending_buyer,buyer_id.eq.${actor.id})`]
+  if (actor.isScheduler) conditions.push('status.eq.pending_approval')
+  const { data, error } = await admin
+    .from('shift_sale_requests').select('*')
+    .or(conditions.join(','))
+    .order('created_at', { ascending: false })
+    .limit(200)
+  if (error) throw new HttpError(500, error.message)
+  return (data ?? []) as Record<string, unknown>[]
+}
+
+export async function GET(request: Request) {
   return respond(async () => {
     const actor = await requireActor()
     const admin = getAdminClient()
-    const base = admin.from('shift_sale_requests').select('*').order('created_at', { ascending: false }).limit(100)
-    const { data, error } = actor.isScheduler
-      ? await base
-      : await base.or(`seller_id.eq.${actor.id},buyer_id.eq.${actor.id}`)
+    const filter = parseHistoryFilter(new URL(request.url))
+
+    const actionableRows = await getActionableSales(actor)
+
+    let historyQuery = admin.from('shift_sale_requests').select('*', { count: 'exact' })
+    if (!actor.isScheduler) historyQuery = historyQuery.or(`seller_id.eq.${actor.id},buyer_id.eq.${actor.id}`)
+    if (filter.gte) historyQuery = historyQuery.gte('created_at', filter.gte)
+    if (filter.lt) historyQuery = historyQuery.lt('created_at', filter.lt)
+    const { data: historyRows, error, count } = await historyQuery
+      .order('created_at', { ascending: false })
+      .range(filter.offset, filter.offset + filter.pageSize - 1)
     if (error) throw new HttpError(500, error.message)
-    const rows = (data ?? []) as Record<string, unknown>[]
-    return { sales: await joinSaleDetails(rows), me: actor.id, isScheduler: actor.isScheduler }
+
+    return {
+      actionable: await joinSaleDetails(actionableRows),
+      history: await joinSaleDetails((historyRows ?? []) as Record<string, unknown>[]),
+      me: actor.id,
+      isScheduler: actor.isScheduler,
+      page: filter.page,
+      pageSize: filter.pageSize,
+      total: count ?? 0,
+    }
   })
 }
 

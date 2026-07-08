@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Coins, Plus } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
+import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
 import { thaiShortDate } from '@/lib/dates'
 import { SALE_STATUS_TH, type SaleStatus } from '@/lib/types'
@@ -32,7 +33,8 @@ const TONE: Record<SaleStatus, 'blue' | 'green' | 'amber' | 'red' | 'gray' | 'vi
 }
 
 export function SalesView() {
-  const [sales, setSales] = useState<SaleRow[]>([])
+  const [actionable, setActionable] = useState<SaleRow[]>([])
+  const [history, setHistory] = useState<SaleRow[]>([])
   const [me, setMe] = useState('')
   const [isScheduler, setIsScheduler] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -44,21 +46,40 @@ export function SalesView() {
   const [buyerId, setBuyerId] = useState('')
   const [reason, setReason] = useState('')
 
+  const [fromMonth, setFromMonth] = useState('')
+  const [toMonth, setToMonth] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const pageSize = 20
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api<{ sales: SaleRow[]; me: string; isScheduler: boolean }>('/api/sales')
-      setSales(data.sales)
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+      if (fromMonth) params.set('from', fromMonth)
+      if (toMonth) params.set('to', toMonth)
+      const data = await api<{ actionable: SaleRow[]; history: SaleRow[]; me: string; isScheduler: boolean; total: number }>(
+        `/api/sales?${params.toString()}`,
+      )
+      setActionable(data.actionable)
+      setHistory(data.history)
       setMe(data.me)
       setIsScheduler(data.isScheduler)
+      setTotal(data.total)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'โหลดไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [page, fromMonth, toMonth])
 
   useEffect(() => { load() }, [load])
+
+  function clearFilter() {
+    setFromMonth('')
+    setToMonth('')
+    setPage(1)
+  }
 
   async function openCreate() {
     setCreateOpen(true)
@@ -118,10 +139,8 @@ export function SalesView() {
   const pickedTeamId = pickedShifts[0]?.teamId
   const buyerOptions = options?.members.filter((m) => m.teamId === pickedTeamId) ?? []
 
-  const incoming = sales.filter((s) => s.buyer_id === me && s.status === 'pending_buyer')
-  const approvals = sales.filter((s) => s.status === 'pending_approval')
-  const mine = sales.filter((s) => s.seller_id === me || s.buyer_id === me)
-  const history = isScheduler ? sales : mine
+  const incoming = actionable.filter((s) => s.buyer_id === me && s.status === 'pending_buyer')
+  const approvals = actionable.filter((s) => s.status === 'pending_approval')
 
   function SaleCard({ sale }: { sale: SaleRow }) {
     return (
@@ -188,7 +207,18 @@ export function SalesView() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-bold text-slate-600">ประวัติการขายเวร</h2>
-        {history.length === 0 && <Card><EmptyState text="ยังไม่มีคำขอขายเวร" /></Card>}
+        <HistoryControls
+          from={fromMonth}
+          to={toMonth}
+          onFromChange={(v) => { setFromMonth(v); setPage(1) }}
+          onToChange={(v) => { setToMonth(v); setPage(1) }}
+          onClear={clearFilter}
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+        />
+        {history.length === 0 && <Card><EmptyState text="ไม่มีคำขอขายเวรในช่วงที่เลือก" /></Card>}
         {history.map((s) => <SaleCard key={s.id} sale={s} />)}
       </section>
 

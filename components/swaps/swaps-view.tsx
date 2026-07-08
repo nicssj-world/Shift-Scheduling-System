@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeftRight, Plus } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
+import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
 import { thaiShortDate } from '@/lib/dates'
 import { SWAP_STATUS_TH, type SwapStatus } from '@/lib/types'
@@ -33,7 +34,8 @@ const TONE: Record<SwapStatus, 'blue' | 'green' | 'amber' | 'red' | 'gray' | 'vi
 }
 
 export function SwapsView() {
-  const [swaps, setSwaps] = useState<SwapRow[]>([])
+  const [actionable, setActionable] = useState<SwapRow[]>([])
+  const [history, setHistory] = useState<SwapRow[]>([])
   const [me, setMe] = useState('')
   const [isScheduler, setIsScheduler] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -45,21 +47,40 @@ export function SwapsView() {
   const [theirPick, setTheirPick] = useState('')
   const [reason, setReason] = useState('')
 
+  const [fromMonth, setFromMonth] = useState('')
+  const [toMonth, setToMonth] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const pageSize = 20
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api<{ swaps: SwapRow[]; me: string; isScheduler: boolean }>('/api/swaps')
-      setSwaps(data.swaps)
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+      if (fromMonth) params.set('from', fromMonth)
+      if (toMonth) params.set('to', toMonth)
+      const data = await api<{ actionable: SwapRow[]; history: SwapRow[]; me: string; isScheduler: boolean; total: number }>(
+        `/api/swaps?${params.toString()}`,
+      )
+      setActionable(data.actionable)
+      setHistory(data.history)
       setMe(data.me)
       setIsScheduler(data.isScheduler)
+      setTotal(data.total)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'โหลดไม่สำเร็จ')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [page, fromMonth, toMonth])
 
   useEffect(() => { load() }, [load])
+
+  function clearFilter() {
+    setFromMonth('')
+    setToMonth('')
+    setPage(1)
+  }
 
   async function openCreate() {
     setCreateOpen(true)
@@ -108,10 +129,8 @@ export function SwapsView() {
   const myPicked = options?.mine.find((m) => m.id === myPick)
   const targets = options?.others.filter((o) => !myPicked || o.scheduleId === myPicked.scheduleId) ?? []
 
-  const incoming = swaps.filter((s) => s.target_user_id === me && s.status === 'pending_counterpart')
-  const approvals = swaps.filter((s) => s.status === 'pending_approval')
-  const mine = swaps.filter((s) => s.requester_id === me || s.target_user_id === me)
-  const history = isScheduler ? swaps : mine
+  const incoming = actionable.filter((s) => s.target_user_id === me && s.status === 'pending_counterpart')
+  const approvals = actionable.filter((s) => s.status === 'pending_approval')
 
   function SwapCard({ swap }: { swap: SwapRow }) {
     return (
@@ -175,7 +194,18 @@ export function SwapsView() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-bold text-slate-600">ประวัติการแลกเวร</h2>
-        {history.length === 0 && <Card><EmptyState text="ยังไม่มีคำขอแลกเวร" /></Card>}
+        <HistoryControls
+          from={fromMonth}
+          to={toMonth}
+          onFromChange={(v) => { setFromMonth(v); setPage(1) }}
+          onToChange={(v) => { setToMonth(v); setPage(1) }}
+          onClear={clearFilter}
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+        />
+        {history.length === 0 && <Card><EmptyState text="ไม่มีคำขอแลกเวรในช่วงที่เลือก" /></Card>}
         {history.map((s) => <SwapCard key={s.id} swap={s} />)}
       </section>
 
