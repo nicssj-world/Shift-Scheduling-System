@@ -32,7 +32,7 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
       items: [
         { href: '/schedule', label: 'ตารางเวร', icon: <CalendarDays size={17} />, show: true },
         { href: '/schedule/manage', label: 'จัดตารางเวร', icon: <CalendarCog size={17} />, show: actor.isScheduler },
-        { href: '/swaps', label: 'แลกเวร', icon: <ArrowLeftRight size={17} />, show: true },
+        { href: '/swaps', label: 'แลก/ขายเวร', icon: <ArrowLeftRight size={17} />, show: true },
         { href: '/leaves', label: 'วันลา', icon: <Palmtree size={17} />, show: true },
       ],
     },

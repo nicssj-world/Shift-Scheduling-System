@@ -51,6 +51,10 @@ export async function getSwapSettings() {
   return getSetting<{ requiresApproval: boolean }>('swap', { requiresApproval: true })
 }
 
+export async function getSaleSettings() {
+  return getSetting<{ requiresApproval: boolean }>('sale', { requiresApproval: true })
+}
+
 // ---------- reference data ----------
 export async function getTeams(): Promise<Team[]> {
   const { data, error } = await admin().from('shift_teams').select('*').order('sort_order')

@@ -189,6 +189,35 @@ export type SwapRequest = {
   created_at: string
 }
 
+export type SaleStatus =
+  | 'pending_buyer'
+  | 'pending_approval'
+  | 'approved'
+  | 'declined'
+  | 'rejected'
+  | 'cancelled'
+
+export type SaleRequest = {
+  id: string
+  seller_id: string
+  buyer_id: string
+  reason: string | null
+  status: SaleStatus
+  buyer_responded_at: string | null
+  decided_by: string | null
+  decided_at: string | null
+  created_at: string
+}
+
+export const SALE_STATUS_TH: Record<SaleStatus, string> = {
+  pending_buyer: 'รอผู้ซื้อตอบรับ',
+  pending_approval: 'รอผู้จัดเวรอนุมัติ',
+  approved: 'อนุมัติแล้ว',
+  declined: 'ผู้ซื้อปฏิเสธ',
+  rejected: 'ผู้จัดเวรไม่อนุมัติ',
+  cancelled: 'ยกเลิก',
+}
+
 export type AppNotification = {
   id: string
   user_id: string
