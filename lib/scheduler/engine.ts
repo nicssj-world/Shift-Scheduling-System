@@ -1,5 +1,5 @@
 import { addDays, mondayOfWeek } from '@/lib/dates'
-import { addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
+import { addRegularWork, addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
 import {
   consecutiveWorkDaysBefore, emptyStats, fairnessScore, pairingPenalty, recordPairs, tieBreakHash, type PairCounts,
 } from '@/lib/scheduler/fairness'
@@ -42,6 +42,14 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
       monthCount: 0,
       unavailable: new Set(input.unavailable[member.userId] ?? []),
     }
+    // Everyone works the implicit 08:00–16:00 regular shift on ordinary
+    // weekdays unless on leave. It is not OT and does not increase the
+    // monthly assignment total, but it must participate in the 16-hour cap
+    // and physical day-off/consecutive-day checks.
+    for (const day of days) {
+      if (day.dayClass === 'weekday' && !state.unavailable.has(day.date)) addRegularWork(state, day.date)
+    }
+    for (const date of input.carryIn.regularWorkDates) addRegularWork(state, date)
     // Previous-month boundary assignments: constrain rest/contiguity across
     // the month edge but do not count toward this month's totals.
     for (const carry of input.carryIn.assignments[member.userId] ?? []) {
@@ -56,11 +64,14 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
     const personStats = emptyStats()
     personStats.byType = { ...(input.carryIn.shiftTypeCounts[member.userId] ?? {}) }
     personStats.byJob = { ...(input.carryIn.jobCounts[member.userId] ?? {}) }
+    personStats.weekendHoliday = input.carryIn.weekendHolidayCounts[member.userId] ?? 0
     stats[member.userId] = personStats
   }
 
   const orderedSlots = [...input.slots].sort((a, b) => a.startMin - b.startMin || a.code.localeCompare(b.code))
-  const pairCounts: PairCounts = {}
+  const pairCounts: PairCounts = Object.fromEntries(
+    Object.entries(input.carryIn.pairCounts).map(([userId, counts]) => [userId, { ...counts }]),
+  )
 
   for (const day of days) {
     for (const slot of orderedSlots) {
@@ -99,9 +110,18 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
       const remaining = [...pool]
       while (chosen.length < required && remaining.length > 0) {
         remaining.sort((a, b) => {
+          // A monthly roster must stay balanced in its own right. Historical
+          // totals can decide who gets an otherwise-tied extra shift, but
+          // must not cause this month's workload to drift apart.
+          const currentMonthDifference = stats[a.member.userId].total - stats[b.member.userId].total
+          const weekendHolidayDifference = day.dayClass === 'weekday'
+            ? 0
+            : stats[a.member.userId].weekendHoliday - stats[b.member.userId].weekendHoliday
           const aTotal = a.baseScore + pairingPenalty(a.member.userId, chosenIds, pairCounts, config.weights.pairing)
           const bTotal = b.baseScore + pairingPenalty(b.member.userId, chosenIds, pairCounts, config.weights.pairing)
           return (
+            currentMonthDifference ||
+            weekendHolidayDifference ||
             aTotal - bTotal ||
             a.typeCount - b.typeCount ||
             tieBreakHash(`${day.date}|${slot.code}|${a.member.key}`) - tieBreakHash(`${day.date}|${slot.code}|${b.member.key}`) ||
@@ -149,7 +169,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
   const totals = staff.map((m) => stats[m.userId].total)
   if (totals.length > 0) {
     const spread = Math.max(...totals) - Math.min(...totals)
-    if (spread > 4) {
+    if (spread > 1) {
       violations.push({
         date: days[0]?.date ?? '',
         rule: 'imbalance',

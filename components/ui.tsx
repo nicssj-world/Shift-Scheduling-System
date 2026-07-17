@@ -52,7 +52,11 @@ export function Modal({ open, onClose, title, children, wide = false }: {
 }) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/40 p-0 sm:p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/40 p-0 sm:p-4"
+      role="dialog"
+      aria-modal="true"
+    >
       <div
         className={`w-full ${wide ? 'sm:max-w-2xl' : 'sm:max-w-md'} max-h-[90vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-white p-5 shadow-2xl`}
         onClick={(e) => e.stopPropagation()}

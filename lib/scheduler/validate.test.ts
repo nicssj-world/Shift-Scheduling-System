@@ -32,25 +32,62 @@ describe('validateAssignments', () => {
     expect(violations.some((v) => v.rule === 'leave' && v.userId === 'u01')).toBe(true)
   })
 
-  it('flags more than 16 contiguous hours (N+M+A chain)', () => {
+  it('flags more than 16 contiguous hours (N + implicit regular M + A chain)', () => {
     const violations = validateAssignments(ctx(), [
       a('2026-08-03', 'N', 'u01'),
-      a('2026-08-03', 'M', 'u01'),
       a('2026-08-03', 'A', 'u01'),
     ])
     expect(violations.some((v) => v.rule === 'max_consecutive_hours')).toBe(true)
   })
 
   it('flags doubles when the toggle is off but allows them when on', () => {
-    const double = [a('2026-08-03', 'A', 'u01'), a('2026-08-04', 'N', 'u01')]
+    // Weekend A→N has no implicit regular 08:00–16:00 work between it.
+    const double = [a('2026-08-08', 'A', 'u01'), a('2026-08-09', 'N', 'u01')]
     const strict = validateAssignments(
-      ctx({ config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: false } }),
+      ctx({ config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: false, requireWeeklyDayOff: false } }),
       double,
     )
     expect(strict.some((v) => v.rule === 'double_shift')).toBe(true)
 
-    const lenient = validateAssignments(ctx(), double)
+    const lenient = validateAssignments(
+      ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false } }),
+      double,
+    )
     expect(lenient.filter((v) => v.severity === 'error')).toEqual([])
+  })
+
+  it('always blocks a Sunday A-to-Monday N double because Monday regular work makes 24 hours', () => {
+    const sundayDouble = [
+      a('2026-08-09', 'A', 'u01'),
+      a('2026-08-10', 'N', 'u01'),
+    ]
+    const violations = validateAssignments(
+      ctx({ config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: true, requireWeeklyDayOff: false } }),
+      sundayDouble,
+    )
+
+    expect(violations.some((v) => v.rule === 'max_consecutive_hours')).toBe(true)
+  })
+
+  it('counts implicit weekday 08:00–16:00 regular work toward the 16-hour cap', () => {
+    // Regular M + Monday A is exactly 16 hours and remains legal even when
+    // OT doubles are disabled (there is only one OT assignment).
+    const exactly16 = validateAssignments(
+      ctx({ config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: false } }),
+      [a('2026-08-03', 'A', 'u01')],
+    )
+    expect(exactly16.filter((v) => v.severity === 'error')).toEqual([])
+
+    const nightThenRegular = validateAssignments(ctx(), [a('2026-08-03', 'N', 'u01')])
+    expect(nightThenRegular.filter((v) => v.severity === 'error')).toEqual([])
+
+    // Monday regular M + A + Tuesday N + Tuesday regular M would be a
+    // continuous 32-hour chain, so it must always be rejected.
+    const over16 = validateAssignments(ctx(), [
+      a('2026-08-03', 'A', 'u01'),
+      a('2026-08-04', 'N', 'u01'),
+    ])
+    expect(over16.some((v) => v.rule === 'max_consecutive_hours')).toBe(true)
   })
 
   it('flags insufficient rest after a night shift', () => {

@@ -44,6 +44,7 @@ export function ScheduleView({ manage }: { manage: boolean }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [violations, setViolations] = useState<Violation[]>([])
+  const [validationState, setValidationState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const [mode, setMode] = useState<'grid' | 'list'>('grid')
   const [cell, setCell] = useState<RosterCell | null>(null)
   const [candidates, setCandidates] = useState<Candidate[] | null>(null)
@@ -59,15 +60,30 @@ export function ScheduleView({ manage }: { manage: boolean }) {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setValidationState('idle')
     try {
       const data = await api<ScheduleBundle>(`/api/schedules?month=${month}${teamId ? `&team=${teamId}` : ''}`)
       setBundle(data)
-      if (manage && data.schedule && data.canManage) {
-        api<{ violations: Violation[] }>(`/api/schedules/${data.schedule.id}/validate`)
-          .then((v) => setViolations(v.violations))
-          .catch(() => setViolations([]))
+      const isEmptyDraft = data.schedule?.status === 'draft'
+        && !data.schedule.generated_at
+        && data.assignments.length === 0
+      setViolations([])
+      // A newly-created draft is intentionally empty. Validating it here
+      // reports every required slot as understaffed before the user has run
+      // auto-generation, which makes successful draft creation look broken.
+      if (manage && data.schedule && data.canManage && !isEmptyDraft) {
+        setValidationState('loading')
+        try {
+          const validation = await api<{ violations: Violation[] }>(`/api/schedules/${data.schedule.id}/validate`)
+          setViolations(validation.violations)
+          setValidationState('ready')
+        } catch {
+          setViolations([])
+          setValidationState('failed')
+          setError('ตรวจสอบกฎการจัดเวรไม่สำเร็จ กรุณารีเฟรชก่อนเผยแพร่หรือล็อคตาราง')
+        }
       } else {
-        setViolations([])
+        setValidationState('ready')
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'โหลดข้อมูลไม่สำเร็จ')
@@ -197,6 +213,9 @@ export function ScheduleView({ manage }: { manage: boolean }) {
   const errorCount = violations.filter((v) => v.severity === 'error').length
   const schedule = bundle?.schedule ?? null
   const status = schedule ? STATUS_TH[schedule.status] : null
+  const isEmptyDraft = schedule?.status === 'draft'
+    && !schedule.generated_at
+    && (bundle?.assignments.length ?? 0) === 0
 
   const dayList = useMemo(() => {
     if (!bundle) return []
@@ -296,10 +315,21 @@ export function ScheduleView({ manage }: { manage: boolean }) {
               </Button>
               <Button
                 variant="success"
-                disabled={busy}
+                disabled={busy || isEmptyDraft || validationState !== 'ready' || errorCount > 0}
+                title={
+                  isEmptyDraft
+                    ? 'กรุณาสร้างตารางอัตโนมัติก่อนเผยแพร่'
+                    : validationState === 'loading'
+                      ? 'กำลังตรวจสอบกฎการจัดเวร'
+                      : validationState === 'failed'
+                        ? 'ตรวจสอบกฎไม่สำเร็จ กรุณารีเฟรช'
+                        : errorCount > 0
+                          ? `ต้องแก้ข้อผิดพลาด ${errorCount} จุดก่อนเผยแพร่`
+                          : undefined
+                }
                 onClick={() => askConfirm(
                   'เผยแพร่ตารางเวร',
-                  errorCount > 0 ? `ยังมีข้อผิดพลาด ${errorCount} จุด ต้องการเผยแพร่หรือไม่?` : 'เผยแพร่ตารางเวรให้ทุกคนเห็น?',
+                  'เผยแพร่ตารางเวรให้ทุกคนเห็น?',
                   () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'publish' }) })),
                 )}
               >
@@ -322,7 +352,8 @@ export function ScheduleView({ manage }: { manage: boolean }) {
             <>
               <Button
                 variant="danger"
-                disabled={busy}
+                disabled={busy || validationState !== 'ready' || errorCount > 0}
+                title={errorCount > 0 ? `ต้องแก้ข้อผิดพลาด ${errorCount} จุดก่อนล็อค` : undefined}
                 onClick={() => askConfirm(
                   'ล็อคตารางเวร',
                   'ล็อคตารางเวรเดือนนี้? เมื่อล็อคแล้วจะไม่สามารถแก้ไขหรือแลกเวรได้อีก',
@@ -364,6 +395,12 @@ export function ScheduleView({ manage }: { manage: boolean }) {
             <span className="text-xs text-slate-400">คลิกช่องในตารางเพื่อแก้ไขรายคน</span>
           )}
         </Card>
+      )}
+
+      {manage && isEmptyDraft && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-[13px] text-sky-800">
+          สร้างฉบับร่างสำเร็จแล้ว ตารางยังว่างอยู่ — กด “สร้างตารางอัตโนมัติ” เพื่อให้ระบบจัดเวร แล้วจึงตรวจสอบและเผยแพร่
+        </div>
       )}
 
       {/* violations */}

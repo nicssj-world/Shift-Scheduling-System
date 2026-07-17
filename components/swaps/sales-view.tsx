@@ -5,7 +5,7 @@ import { Coins, Plus } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
-import { bangkokMonthNow, thaiShortDate } from '@/lib/dates'
+import { bangkokMonthNow, thaiMonthLabel, thaiShortDate } from '@/lib/dates'
 import { SALE_STATUS_TH, type SaleStatus } from '@/lib/types'
 
 type SaleRow = {
@@ -18,9 +18,21 @@ type SaleRow = {
   buyerName: string
   shifts: { date: string; type: string; code: string }[]
   created_at: string
+  events: RequestEvent[]
 }
 
-type OptionShift = { id: string; scheduleId: string; teamId: string; date: string; code: string; typeName: string }
+type RequestEvent = { id: string; eventType: string; fromStatus: string | null; toStatus: string; createdAt: string }
+
+type OptionShift = {
+  id: string
+  scheduleId: string
+  teamId: string
+  date: string
+  code: string
+  typeName: string
+  selectable: boolean
+  unavailableReason: string | null
+}
 type Member = { userId: string; userName: string; teamId: string }
 
 const TONE: Record<SaleStatus, 'blue' | 'green' | 'amber' | 'red' | 'gray' | 'violet'> = {
@@ -32,6 +44,12 @@ const TONE: Record<SaleStatus, 'blue' | 'green' | 'amber' | 'red' | 'gray' | 'vi
   cancelled: 'gray',
 }
 
+function thaiDateTime(value: string) {
+  return new Intl.DateTimeFormat('th-TH', {
+    dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Bangkok',
+  }).format(new Date(value))
+}
+
 export function SalesView() {
   const [actionable, setActionable] = useState<SaleRow[]>([])
   const [history, setHistory] = useState<SaleRow[]>([])
@@ -41,10 +59,12 @@ export function SalesView() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [optionMonth, setOptionMonth] = useState(bangkokMonthNow())
   const [options, setOptions] = useState<{ mine: OptionShift[]; members: Member[] } | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [buyerId, setBuyerId] = useState('')
   const [reason, setReason] = useState('')
+  const [confirmBox, setConfirmBox] = useState<{ message: string; run: () => void } | null>(null)
 
   const [fromMonth, setFromMonth] = useState(bangkokMonthNow())
   const [toMonth, setToMonth] = useState(bangkokMonthNow())
@@ -81,17 +101,33 @@ export function SalesView() {
     setPage(1)
   }
 
+  async function loadCreateOptions(month: string) {
+    setOptions(null)
+    try {
+      setOptions(await api<{ mine: OptionShift[]; members: Member[] }>(`/api/sales/options?month=${month}`))
+    } catch (e) {
+      setOptions({ mine: [], members: [] })
+      setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
+    }
+  }
+
   async function openCreate() {
+    const month = fromMonth || toMonth || bangkokMonthNow()
     setCreateOpen(true)
+    setOptionMonth(month)
     setPicked(new Set())
     setBuyerId('')
     setReason('')
-    setOptions(null)
-    try {
-      setOptions(await api<{ mine: OptionShift[]; members: Member[] }>('/api/sales/options'))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
-    }
+    setError(null)
+    await loadCreateOptions(month)
+  }
+
+  async function changeOptionMonth(month: string) {
+    if (!month) return
+    setOptionMonth(month)
+    setPicked(new Set())
+    setBuyerId('')
+    await loadCreateOptions(month)
   }
 
   function toggle(id: string) {
@@ -121,8 +157,7 @@ export function SalesView() {
     }
   }
 
-  async function act(id: string, action: string, confirmText?: string) {
-    if (confirmText && !window.confirm(confirmText)) return
+  async function runAction(id: string, action: string) {
     setBusy(true)
     setError(null)
     try {
@@ -135,9 +170,18 @@ export function SalesView() {
     }
   }
 
+  function act(id: string, action: string, confirmText?: string) {
+    if (confirmText) {
+      setConfirmBox({ message: confirmText, run: () => { void runAction(id, action) } })
+    } else {
+      void runAction(id, action)
+    }
+  }
+
   const pickedShifts = options?.mine.filter((m) => picked.has(m.id)) ?? []
   const pickedTeamId = pickedShifts[0]?.teamId
   const buyerOptions = options?.members.filter((m) => m.teamId === pickedTeamId) ?? []
+  const selectableShiftCount = options?.mine.filter((shift) => shift.selectable).length ?? 0
 
   const incoming = actionable.filter((s) => s.buyer_id === me && s.status === 'pending_buyer')
   const approvals = actionable.filter((s) => s.status === 'pending_approval')
@@ -160,6 +204,23 @@ export function SalesView() {
           ))}
         </div>
         {sale.reason && <div className="text-xs text-slate-500">เหตุผล: {sale.reason}</div>}
+        {sale.events.length > 0 && (
+          <details className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <summary className="cursor-pointer font-semibold text-slate-700">ประวัติรายการ ({sale.events.length})</summary>
+            <div className="mt-2 flex flex-col gap-1.5 border-l-2 border-slate-200 pl-3">
+              {sale.events.map((event) => (
+                <div key={event.id}>
+                  <span className="font-medium">
+                    {event.fromStatus
+                      ? `${SALE_STATUS_TH[event.fromStatus as SaleStatus] ?? event.fromStatus} → ${SALE_STATUS_TH[event.toStatus as SaleStatus] ?? event.toStatus}`
+                      : `สร้างคำขอ · ${SALE_STATUS_TH[event.toStatus as SaleStatus] ?? event.toStatus}`}
+                  </span>
+                  <span className="ml-2 text-slate-400">{thaiDateTime(event.createdAt)}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         <div className="flex flex-wrap gap-2">
           {sale.status === 'pending_buyer' && sale.buyer_id === me && (
             <>
@@ -223,17 +284,39 @@ export function SalesView() {
       </section>
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="ขายเวร" wide>
-        {!options ? <Spinner /> : (
-          <div className="flex flex-col gap-4">
-            <Field label="1) เลือกเวรที่ต้องการขาย (เลือกได้หลายเวร)">
+        <div className="flex flex-col gap-4">
+          <Field label="เดือนของเวร">
+            <input
+              type="month"
+              className={inputCls}
+              value={optionMonth}
+              onChange={(e) => { void changeOptionMonth(e.target.value) }}
+            />
+          </Field>
+          {!options ? <Spinner /> : (
+            <>
+            <Field label={`1) เลือกเวรที่ต้องการขาย (ทั้งหมด ${options.mine.length} เวร · เลือกได้ ${selectableShiftCount} เวร)`}>
               {options.mine.length === 0 ? (
-                <div className="text-sm text-slate-400">คุณไม่มีเวรที่เผยแพร่แล้วในอนาคต</div>
+                <div className="text-sm text-slate-400">คุณไม่มีเวรที่เผยแพร่แล้วในเดือน{thaiMonthLabel(optionMonth)}</div>
               ) : (
-                <div className="max-h-48 overflow-y-auto rounded-xl border border-line">
+                <div className="overflow-hidden rounded-xl border border-line">
                   {options.mine.map((m) => (
-                    <label key={m.id} className="flex items-center gap-2 border-b border-line/60 px-3 py-2 text-sm last:border-0">
-                      <input type="checkbox" checked={picked.has(m.id)} onChange={() => toggle(m.id)} />
-                      {thaiShortDate(m.date)} · {m.typeName}
+                    <label
+                      key={m.id}
+                      className={`flex items-center gap-2 border-b border-line/60 px-3 py-2 text-sm last:border-0 ${m.selectable ? 'cursor-pointer hover:bg-brand-50/50' : 'cursor-not-allowed bg-slate-50 text-slate-400'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={picked.has(m.id)}
+                        onChange={() => toggle(m.id)}
+                        disabled={!m.selectable}
+                      />
+                      <span className="min-w-0 flex-1">{thaiShortDate(m.date)} · {m.typeName}</span>
+                      {m.unavailableReason && (
+                        <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                          {m.unavailableReason}
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
@@ -253,6 +336,19 @@ export function SalesView() {
             <Button disabled={picked.size === 0 || !buyerId || busy} onClick={submitCreate}>
               ส่งคำขอขายเวร
             </Button>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      <Modal open={Boolean(confirmBox)} onClose={() => setConfirmBox(null)} title="ยืนยันการดำเนินการ">
+        {confirmBox && (
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-slate-600">{confirmBox.message}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmBox(null)}>ยกเลิก</Button>
+              <Button onClick={() => { const run = confirmBox.run; setConfirmBox(null); run() }}>ยืนยัน</Button>
+            </div>
           </div>
         )}
       </Modal>

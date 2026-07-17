@@ -4,6 +4,7 @@ import { getSaleSettings } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
 import { readJson, respond } from '@/lib/server/route'
+import { transitionRequestStatus } from '@/lib/server/request-status'
 import { applySale } from '@/lib/server/sales'
 import { getAdminClient } from '@/lib/supabase/admin'
 
@@ -28,22 +29,24 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (action === 'cancel') {
       if (String(sale.seller_id) !== actor.id) throw new HttpError(403, 'ยกเลิกได้เฉพาะผู้ขาย')
       if (!status.startsWith('pending')) throw new HttpError(409, 'คำขอนี้ถูกดำเนินการแล้ว')
-      await admin.from('shift_sale_requests').update({ status: 'cancelled' }).eq('id', id)
+      await transitionRequestStatus('shift_sale_requests', id, status, { status: 'cancelled' }, actor.id)
     } else if (action === 'accept' || action === 'decline') {
       if (String(sale.buyer_id) !== actor.id) throw new HttpError(403, 'เฉพาะผู้ซื้อเท่านั้น')
       if (status !== 'pending_buyer') throw new HttpError(409, 'คำขอนี้ถูกตอบแล้ว')
 
       if (action === 'decline') {
-        await admin.from('shift_sale_requests')
-          .update({ status: 'declined', buyer_responded_at: now }).eq('id', id)
+        await transitionRequestStatus('shift_sale_requests', id, status, {
+          status: 'declined', buyer_responded_at: now,
+        }, actor.id)
         await notifyUsers([String(sale.seller_id)], {
           type: 'sale_declined', title: `${actor.name} ปฏิเสธคำขอขายเวรของคุณ`, link: '/swaps',
         })
       } else {
         const { requiresApproval } = await getSaleSettings()
         if (requiresApproval) {
-          await admin.from('shift_sale_requests')
-            .update({ status: 'pending_approval', buyer_responded_at: now }).eq('id', id)
+          await transitionRequestStatus('shift_sale_requests', id, status, {
+            status: 'pending_approval', buyer_responded_at: now,
+          }, actor.id)
           await notifyUsers([String(sale.seller_id)], {
             type: 'sale_accepted', title: `${actor.name} ตอบรับซื้อเวร — รอผู้จัดเวรอนุมัติ`, link: '/swaps',
           })
@@ -59,9 +62,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
             type: 'sale_pending_approval', title: 'มีคำขอขายเวรรออนุมัติ', link: '/swaps',
           })
         } else {
-          await applySale(sale)
-          await admin.from('shift_sale_requests')
-            .update({ status: 'approved', buyer_responded_at: now, decided_at: now }).eq('id', id)
+          await applySale(sale, {
+            expectedStatus: status,
+            actorId: actor.id,
+            respondedAt: now,
+          })
           await notifyUsers(both, { type: 'sale_approved', title: 'ขายเวรสำเร็จ ตารางเวรถูกปรับแล้ว', link: '/schedule' })
         }
       }
@@ -69,13 +74,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (!actor.isScheduler) throw new HttpError(403, 'ต้องเป็นผู้จัดเวร')
       if (status !== 'pending_approval') throw new HttpError(409, 'คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ')
       if (action === 'approve') {
-        await applySale(sale)
-        await admin.from('shift_sale_requests')
-          .update({ status: 'approved', decided_by: actor.id, decided_at: now }).eq('id', id)
+        await applySale(sale, {
+          expectedStatus: status,
+          actorId: actor.id,
+          decidedBy: actor.id,
+        })
         await notifyUsers(both, { type: 'sale_approved', title: 'คำขอขายเวรได้รับอนุมัติ ตารางเวรถูกปรับแล้ว', link: '/schedule' })
       } else {
-        await admin.from('shift_sale_requests')
-          .update({ status: 'rejected', decided_by: actor.id, decided_at: now }).eq('id', id)
+        await transitionRequestStatus('shift_sale_requests', id, status, {
+          status: 'rejected', decided_by: actor.id, decided_at: now,
+        }, actor.id)
         await notifyUsers(both, { type: 'sale_rejected', title: 'คำขอขายเวรไม่ได้รับอนุมัติ', link: '/swaps' })
       }
     }

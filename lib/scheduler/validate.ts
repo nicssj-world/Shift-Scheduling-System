@@ -1,5 +1,5 @@
 import { addDays, mondayOfWeek } from '@/lib/dates'
-import { toInterval, type Interval } from '@/lib/scheduler/constraints'
+import { addRegularWork, toInterval, type Interval, type PersonState } from '@/lib/scheduler/constraints'
 import type { AssignmentDraft, CarryIn, DayInfo, SchedulerConfig, SlotDef, Violation } from '@/lib/scheduler/types'
 
 export type ValidateContext = {
@@ -57,11 +57,19 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
   for (const [userId, list] of byUser) {
     const unavailable = new Set(ctx.unavailable[userId] ?? [])
     const intervals: Interval[] = []
+    const workDates = new Set<string>()
+    const person: PersonState = { intervals, workDates, monthCount: list.length, unavailable }
+
+    for (const day of ctx.days) {
+      if (day.dayClass === 'weekday' && !unavailable.has(day.date)) addRegularWork(person, day.date)
+    }
+    for (const date of ctx.carryIn?.regularWorkDates ?? []) addRegularWork(person, date)
 
     for (const a of list) {
       const slot = slotByCode.get(a.code)
       if (!slot) continue
       intervals.push(toInterval(a.date, slot))
+      workDates.add(a.date)
       if (unavailable.has(a.date)) {
         violations.push({
           date: a.date, shiftTypeCode: a.code, userId, rule: 'leave', severity: 'error',
@@ -93,7 +101,8 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
       while (runEnd + 1 < intervals.length && intervals[runEnd + 1].startAbs === intervals[runEnd].endAbs) {
         runEnd += 1
       }
-      const runShifts = runEnd - runStart + 1
+      const runOvertimeShifts = intervals.slice(runStart, runEnd + 1)
+        .filter((interval) => !interval.isRegularWork).length
       const runMinutes = intervals[runEnd].endAbs - intervals[runStart].startAbs
       const inMonth = daySet.has(intervals[runEnd].date)
       if (inMonth && runMinutes > MAX_CONTIGUOUS_MIN) {
@@ -101,7 +110,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
           date: intervals[runEnd].date, userId, rule: 'max_consecutive_hours', severity: 'error',
           message: `${intervals[runEnd].date}: ทำงานติดต่อกันเกิน 16 ชม.`,
         })
-      } else if (inMonth && runShifts > 1 && !ctx.config.allowAfternoonNightDouble) {
+      } else if (inMonth && runOvertimeShifts > 1 && !ctx.config.allowAfternoonNightDouble) {
         violations.push({
           date: intervals[runEnd].date, userId, rule: 'double_shift', severity: 'error',
           message: `${intervals[runEnd].date}: เวรควบไม่ได้รับอนุญาต`,
@@ -114,7 +123,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
     for (const night of intervals) {
       if (!night.isNight) continue
       for (const other of intervals) {
-        if (other === night || other.startAbs < night.endAbs) continue
+        if (other === night || other.isRegularWork || other.startAbs < night.endAbs) continue
         const gap = other.startAbs - night.endAbs
         if (gap > 0 && gap < ctx.config.minRestHoursAfterNight * 60 && daySet.has(other.date)) {
           violations.push({
@@ -136,7 +145,6 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
 
     // weekly day off (only weeks fully inside the schedule range)
     if (ctx.config.requireWeeklyDayOff) {
-      const workDates = new Set(list.map((a) => a.date))
       const checkedWeeks = new Set<string>()
       for (const date of workDates) {
         if (!dayByDate.has(date)) continue

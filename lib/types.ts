@@ -145,7 +145,7 @@ export type Assignment = {
   shift_type_id: string
   user_id: string
   job_id: string | null
-  source: 'auto' | 'manual' | 'swap'
+  source: 'auto' | 'manual' | 'swap' | 'sale'
 }
 
 export type LeaveType = 'vacation' | 'sick' | 'personal' | 'other'

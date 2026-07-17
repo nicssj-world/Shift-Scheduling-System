@@ -1,12 +1,16 @@
 import { z } from 'zod'
 import { requireActor } from '@/lib/server/auth'
+import { assertOwnerChangesValid } from '@/lib/server/assignment-changes'
 import { getShiftTypes, getSwapSettings } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
 import { parseHistoryFilter } from '@/lib/server/pagination'
+import { assertAssignmentsHaveNoPendingRequest } from '@/lib/server/request-conflicts'
+import { getRequestEvents } from '@/lib/server/request-events'
+import { throwRequestRpcError } from '@/lib/server/request-rpc'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { thaiShortDate } from '@/lib/dates'
+import { bangkokDateString, thaiShortDate } from '@/lib/dates'
 import type { Actor } from '@/lib/types'
 
 async function joinSwapDetails(rows: Record<string, unknown>[]) {
@@ -14,10 +18,11 @@ async function joinSwapDetails(rows: Record<string, unknown>[]) {
   if (rows.length === 0) return []
   const assignmentIds = [...new Set(rows.flatMap((r) => [String(r.requester_assignment_id), String(r.target_assignment_id)]))]
   const userIds = [...new Set(rows.flatMap((r) => [String(r.requester_id), String(r.target_user_id)]))]
-  const [{ data: assignments }, { data: profiles }, shiftTypes] = await Promise.all([
+  const [{ data: assignments }, { data: profiles }, shiftTypes, eventsByRequest] = await Promise.all([
     admin.from('shift_assignments').select('id,work_date,shift_type_id,user_id,schedule_id').in('id', assignmentIds),
     admin.from('profiles').select('id,name').in('id', userIds),
     getShiftTypes(),
+    getRequestEvents('swap', rows.map((row) => String(row.id))),
   ])
   const assignmentById = new Map((assignments ?? []).map((a) => [String(a.id), a]))
   const nameById = new Map((profiles ?? []).map((p) => [String(p.id), String(p.name)]))
@@ -34,6 +39,7 @@ async function joinSwapDetails(rows: Record<string, unknown>[]) {
       targetName: nameById.get(String(r.target_user_id)) ?? '',
       requesterShift: ra ? { date: String(ra.work_date), type: raType?.name_th ?? '', code: raType?.code ?? '' } : null,
       targetShift: ta ? { date: String(ta.work_date), type: taType?.name_th ?? '', code: taType?.code ?? '' } : null,
+      events: eventsByRequest.get(String(r.id)) ?? [],
     }
   })
 }
@@ -105,28 +111,42 @@ export async function POST(request: Request) {
     if (!mine || !theirs) throw new HttpError(404, 'ไม่พบเวรที่เลือก')
     if (String(mine.user_id) !== actor.id) throw new HttpError(403, 'เลือกได้เฉพาะเวรของตัวเอง')
     if (String(theirs.user_id) === actor.id) throw new HttpError(400, 'เลือกเวรของเพื่อนร่วมงานเป็นคู่แลก')
+    const today = bangkokDateString()
+    if (String(mine.work_date) < today || String(theirs.work_date) < today) {
+      throw new HttpError(400, 'เลือกได้เฉพาะเวรวันนี้หรือในอนาคต')
+    }
 
     // both schedules must not be locked
     const scheduleIds = [...new Set([String(mine.schedule_id), String(theirs.schedule_id)])]
-    const { data: schedules } = await admin.from('shift_schedules').select('id,status,team_id').in('id', scheduleIds)
+    if (scheduleIds.length > 1) {
+      throw new HttpError(400, 'แลกเวรได้เฉพาะภายในตารางเดือนเดียวกัน')
+    }
+    const { data: schedules, error: schedulesError } = await admin.from('shift_schedules').select('id,status,team_id').in('id', scheduleIds)
+    if (schedulesError || !schedules || schedules.length !== scheduleIds.length) throw new HttpError(409, 'ไม่พบตารางเวรที่เกี่ยวข้อง')
     for (const s of schedules ?? []) {
       if (String(s.status) === 'locked') throw new HttpError(409, 'ตารางเวรถูกล็อคแล้ว ไม่สามารถขอแลกเวรได้')
+      if (String(s.status) !== 'published') throw new HttpError(409, 'แลกได้เฉพาะตารางที่เผยแพร่แล้ว')
     }
     const teamIds = new Set((schedules ?? []).map((s) => String(s.team_id)))
     if (teamIds.size > 1) throw new HttpError(400, 'แลกเวรได้เฉพาะภายในทีมเดียวกัน')
 
-    const { data: swap, error: insertError } = await admin
-      .from('shift_swap_requests')
-      .insert({
-        requester_assignment_id: body.requesterAssignmentId,
-        target_assignment_id: body.targetAssignmentId,
-        requester_id: actor.id,
-        target_user_id: String(theirs.user_id),
-        reason: body.reason ?? null,
-      })
-      .select('*')
-      .single()
-    if (insertError) throw new HttpError(500, insertError.message)
+    await assertAssignmentsHaveNoPendingRequest([String(mine.id), String(theirs.id)])
+    await assertOwnerChangesValid([
+      { assignmentId: String(mine.id), scheduleId: String(mine.schedule_id), newUserId: String(theirs.user_id) },
+      { assignmentId: String(theirs.id), scheduleId: String(theirs.schedule_id), newUserId: actor.id },
+    ])
+
+    // Final reservation is a single database transaction. The earlier check
+    // provides a friendly fast failure; the unique reservation is the actual
+    // race-proof gate when many staff submit simultaneously.
+    const { data: swap, error: insertError } = await admin.rpc('shift_create_swap_request', {
+      p_requester_assignment_id: body.requesterAssignmentId,
+      p_target_assignment_id: body.targetAssignmentId,
+      p_requester_id: actor.id,
+      p_target_user_id: String(theirs.user_id),
+      p_reason: body.reason ?? null,
+    })
+    if (insertError) throwRequestRpcError(insertError, 'สร้างคำขอแลกเวรไม่สำเร็จ')
 
     await notifyUsers([String(theirs.user_id)], {
       type: 'swap_requested',

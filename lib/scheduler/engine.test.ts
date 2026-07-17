@@ -42,7 +42,47 @@ describe('generateSchedule', () => {
   it('keeps workload balanced', () => {
     const result = generateSchedule(baseInput())
     const totals = Object.values(result.stats).map((s) => s.total)
-    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(4)
+    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1)
+  })
+
+  it('keeps monthly workload within one shift when every staff member is available', () => {
+    // July 2026 Central Lab pattern: M has 4 people on weekends only;
+    // A and N each have 4 people every day.  That is 280 shifts for 31
+    // people, so the only valid balanced distribution is 30 people on 9
+    // shifts and one person on 10 shifts.
+    const slots = [
+      {
+        shiftTypeId: 'st-m', code: 'M', startMin: 480, endMin: 960, hours: 8,
+        requiredByDayClass: { weekday: 0, weekend: 4, holiday: 4 } as const,
+      },
+      {
+        shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+        requiredByDayClass: { weekday: 4, weekend: 4, holiday: 4 } as const,
+      },
+      {
+        shiftTypeId: 'st-n', code: 'N', startMin: 0, endMin: 480, hours: 8,
+        requiredByDayClass: { weekday: 4, weekend: 4, holiday: 4 } as const,
+      },
+    ]
+    const staff = makeStaff(31)
+    // The previous month had three people one shift behind. Lifetime
+    // fairness may influence who receives the extra shift, but must never
+    // make the current month's totals differ by more than one.
+    const totalCounts = Object.fromEntries(staff.map((member) => [member.userId, 9]))
+    totalCounts.u01 = 8
+    totalCounts.u02 = 8
+    totalCounts.u03 = 8
+    const input = baseInput({
+      days: makeDays('2026-07'), slots, staff,
+      carryIn: { ...EMPTY_CARRY_IN, totalCounts },
+    })
+    const result = generateSchedule(input)
+    const totals = Object.values(result.stats).map((s) => s.total)
+    const weekendHolidayTotals = Object.values(result.stats).map((s) => s.weekendHoliday)
+
+    expect(result.violations.filter((v) => v.rule === 'understaffed')).toEqual([])
+    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1)
+    expect(Math.max(...weekendHolidayTotals) - Math.min(...weekendHolidayTotals)).toBeLessThanOrEqual(1)
   })
 
   it('respects approved leave', () => {
@@ -60,6 +100,24 @@ describe('generateSchedule', () => {
       (a) => a.code === 'M' && nightByUser.has(`${a.userId}|${a.date}`),
     )
     expect(badMornings).toEqual([])
+  })
+
+  it('never assigns Sunday A followed by Monday N because regular Monday morning would exceed 16 hours', () => {
+    const result = generateSchedule(baseInput())
+    const sundayDoubles = new Set(
+      result.assignments
+        .filter((assignment) => assignment.code === 'A' && new Date(`${assignment.date}T00:00:00Z`).getUTCDay() === 0)
+        .map((assignment) => {
+          const monday = new Date(`${assignment.date}T00:00:00Z`)
+          monday.setUTCDate(monday.getUTCDate() + 1)
+          return `${assignment.userId}|${monday.toISOString().slice(0, 10)}`
+        }),
+    )
+    const badMondayNights = result.assignments.filter(
+      (assignment) => assignment.code === 'N' && sundayDoubles.has(`${assignment.userId}|${assignment.date}`),
+    )
+
+    expect(badMondayNights).toEqual([])
   })
 
   it('blocks afternoon+night doubles when the toggle is off', () => {
@@ -81,10 +139,8 @@ describe('generateSchedule', () => {
     const input = baseInput({
       config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: false },
       carryIn: {
+        ...EMPTY_CARRY_IN,
         assignments: { u01: [{ date: '2026-07-31', code: 'A' }] },
-        shiftTypeCounts: {},
-        jobCounts: {},
-        totalCounts: {},
       },
     })
     const result = generateSchedule(input)
@@ -107,7 +163,7 @@ describe('generateSchedule', () => {
     }
     const input = baseInput({
       staff, slots: [slot], days: makeDays('2026-08'),
-      carryIn: { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts },
+      carryIn: { ...EMPTY_CARRY_IN, totalCounts },
     })
     const result = generateSchedule(input)
 

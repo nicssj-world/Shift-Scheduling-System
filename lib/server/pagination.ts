@@ -13,6 +13,17 @@ export type HistoryFilter = {
   lt: string | null
 }
 
+/** Creation-option endpoints must always be scoped to exactly one roster
+ * month. Missing the parameter must fail closed; otherwise they silently
+ * return every future published schedule and mix months in the modal. */
+export function parseOptionMonth(url: URL) {
+  const month = url.searchParams.get('month')
+  if (!month || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) {
+    throw new HttpError(400, 'กรุณาระบุเดือนในรูปแบบ YYYY-MM')
+  }
+  return month
+}
+
 /** Parses ?from=YYYY-MM&to=YYYY-MM&page=&pageSize= for a paginated history list. */
 export function parseHistoryFilter(url: URL): HistoryFilter {
   const from = url.searchParams.get('from')

@@ -100,27 +100,35 @@ export async function getHolidays(fromDate: string, toDate: string): Promise<Hol
 
 export type MemberWithProfile = TeamMember & { profile: StaffProfile; displayName: string }
 
-export async function getTeamMembers(teamId: string, activeOnly = true): Promise<MemberWithProfile[]> {
-  let query = admin().from('shift_team_members').select('*').eq('team_id', teamId).order('sort_order')
+/** Batch-load members and profiles for one or more teams without an N+1
+ * profiles query per team. Display-name disambiguation remains team-scoped. */
+export async function getTeamMembersForTeams(teamIds: string[], activeOnly = true): Promise<MemberWithProfile[]> {
+  const uniqueTeamIds = [...new Set(teamIds)]
+  if (uniqueTeamIds.length === 0) return []
+  let query = admin().from('shift_team_members').select('*').in('team_id', uniqueTeamIds).order('sort_order')
   if (activeOnly) query = query.eq('is_active', true)
   const { data, error } = await query
   if (error) throw new HttpError(500, error.message)
   const members = (data ?? []) as unknown as TeamMember[]
   if (members.length === 0) return []
 
-  const ids = members.map((m) => m.user_id)
+  const ids = [...new Set(members.map((m) => m.user_id))]
   const { data: profiles, error: profileError } = await admin()
     .from('profiles').select('id,ephis_id,name,role,dept,phone').in('id', ids)
   if (profileError) throw new HttpError(500, profileError.message)
   const profileById = new Map((profiles ?? []).map((p) => [String(p.id), p]))
 
-  const displayNames = buildDisplayNames(
-    members.map((m) => ({
-      userId: m.user_id,
-      fullName: String(profileById.get(m.user_id)?.name ?? ''),
-      displayLabel: m.display_label,
-    })),
-  )
+  const displayNamesByTeam = new Map<string, Map<string, string>>()
+  for (const teamId of uniqueTeamIds) {
+    const teamMembers = members.filter((member) => member.team_id === teamId)
+    displayNamesByTeam.set(teamId, buildDisplayNames(
+      teamMembers.map((member) => ({
+        userId: member.user_id,
+        fullName: String(profileById.get(member.user_id)?.name ?? ''),
+        displayLabel: member.display_label,
+      })),
+    ))
+  }
 
   return members
     .filter((m) => profileById.has(m.user_id))
@@ -136,9 +144,13 @@ export async function getTeamMembers(teamId: string, activeOnly = true): Promise
           dept: p.dept ? String(p.dept) : null,
           phone: p.phone ? String(p.phone) : null,
         },
-        displayName: displayNames.get(m.user_id) ?? String(p.name ?? ''),
+        displayName: displayNamesByTeam.get(m.team_id)?.get(m.user_id) ?? String(p.name ?? ''),
       }
     })
+}
+
+export async function getTeamMembers(teamId: string, activeOnly = true): Promise<MemberWithProfile[]> {
+  return getTeamMembersForTeams([teamId], activeOnly)
 }
 
 // ---------- schedules ----------
@@ -227,12 +239,15 @@ export async function getUnavailableDates(userIds: string[], from: string, to: s
  *   for this team (any month) — so whoever got the "extra" shift one month
  *   is deprioritized afterward instead of staying stuck with it forever;
  *   the odd shift rotates through everyone as history accumulates.
- * - shiftTypeCounts / jobCounts / assignments: previous-month-only data used
- *   for shift-type/job rotation smoothing and boundary rest/contiguity
- *   constraints across the month edge.
+ * - shiftTypeCounts / jobCounts / weekendHolidayCounts / pairCounts:
+ *   previous-month-only data used to smooth rotations across month edges.
+ * - assignments / regularWorkDates: previous-month boundary work used for
+ *   rest and the hard 16-hour continuous-work constraint.
  */
 export async function buildCarryIn(teamId: string, month: string, shiftTypes: ShiftType[], jobs: Job[]): Promise<CarryIn> {
   const prevMonth = previousMonth(month)
+  const prevDates = datesOfMonth(prevMonth)
+  const boundaryDates = prevDates.slice(-3)
   const typeCodeById = new Map(shiftTypes.map((t) => [t.id, t.code]))
   const jobCodeById = new Map(jobs.map((j) => [j.id, j.code]))
 
@@ -241,9 +256,10 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   // query — ~one row per team member — no matter how many months of history
   // pile up, instead of fetching every historical assignment row and summing
   // them in JS.
-  const [{ data: totalsRows, error: totalsError }, { data: prevSchedule }] = await Promise.all([
+  const [{ data: totalsRows, error: totalsError }, { data: prevSchedule }, prevHolidays] = await Promise.all([
     admin().rpc('shift_lifetime_totals', { p_team_id: teamId, p_exclude_month: `${month}-01` }),
     admin().from('shift_schedules').select('id').eq('team_id', teamId).eq('month', `${prevMonth}-01`).maybeSingle(),
+    getHolidays(prevDates[0], prevDates[prevDates.length - 1]),
   ])
   // Degrade to "no lifetime history" instead of breaking generate entirely if
   // the migration adding this function hasn't been run yet.
@@ -254,19 +270,33 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
     totalCounts[String(row.user_id)] = Number(row.total)
   }
 
-  if (!prevSchedule) return { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts }
+  if (!prevSchedule) return {
+    assignments: {}, shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+    regularWorkDates: [], totalCounts,
+  }
 
   const rows = await getAssignments(String(prevSchedule.id))
-  const prevDates = datesOfMonth(prevMonth)
-  const boundary = new Set(prevDates.slice(-3))
+  const holidaySet = new Set(prevHolidays.map((holiday) => holiday.holiday_date))
+  const boundary = new Set(boundaryDates)
+  const regularWorkDates = boundaryDates.filter((date) => !isWeekend(date) && !holidaySet.has(date))
 
-  const carry: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts }
+  const carry: CarryIn = {
+    assignments: {}, shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+    regularWorkDates, totalCounts,
+  }
+  const groups = new Map<string, string[]>()
   for (const row of rows) {
     const userId = String(row.user_id)
     const code = typeCodeById.get(String(row.shift_type_id))
     if (!code) continue
     const counts = (carry.shiftTypeCounts[userId] ??= {})
     counts[code] = (counts[code] ?? 0) + 1
+    const workDate = String(row.work_date)
+    if (isWeekend(workDate) || holidaySet.has(workDate)) {
+      carry.weekendHolidayCounts[userId] = (carry.weekendHolidayCounts[userId] ?? 0) + 1
+    }
+    const groupKey = `${workDate}|${String(row.shift_type_id)}`
+    groups.set(groupKey, [...(groups.get(groupKey) ?? []), userId])
     if (row.job_id) {
       const jobCode = jobCodeById.get(String(row.job_id))
       if (jobCode) {
@@ -274,9 +304,19 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
         jobCounts[jobCode] = (jobCounts[jobCode] ?? 0) + 1
       }
     }
-    if (boundary.has(String(row.work_date))) {
+    if (boundary.has(workDate)) {
       const list = (carry.assignments[userId] ??= [])
-      list.push({ date: String(row.work_date), code })
+      list.push({ date: workDate, code })
+    }
+  }
+  for (const group of groups.values()) {
+    const userIds = [...new Set(group)].sort()
+    for (let i = 0; i < userIds.length; i++) {
+      for (let j = i + 1; j < userIds.length; j++) {
+        const [a, b] = [userIds[i], userIds[j]]
+        ;(carry.pairCounts[a] ??= {})[b] = (carry.pairCounts[a][b] ?? 0) + 1
+        ;(carry.pairCounts[b] ??= {})[a] = (carry.pairCounts[b][a] ?? 0) + 1
+      }
     }
   }
   return carry

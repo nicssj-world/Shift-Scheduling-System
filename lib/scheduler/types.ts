@@ -55,6 +55,15 @@ export type CarryIn = {
   shiftTypeCounts: Record<string, Record<string, number>>
   /** userId → job code → historical count (previous month only) */
   jobCounts: Record<string, Record<string, number>>
+  /** userId → prior-month weekend/holiday shift count. */
+  weekendHolidayCounts: Record<string, number>
+  /** Prior-month co-worker pair counts, used to avoid restarting the same
+   * pairings at every month boundary. */
+  pairCounts: Record<string, Record<string, number>>
+  /** Regular 08:00–16:00 work dates near the previous-month boundary.
+   * These are not OT and do not count toward shift totals, but they do count
+   * toward the hard 16-hour continuous-work limit. */
+  regularWorkDates: string[]
   /** userId → total shifts ever worked on this team, across all prior
    *  months. Seeds fairness scoring so someone who got the "extra" shift
    *  one month is deprioritized in later months instead of staying stuck
@@ -104,4 +113,12 @@ export type SchedulerResult = {
   stats: Record<string, PersonStats>
 }
 
-export const EMPTY_CARRY_IN: CarryIn = { assignments: {}, shiftTypeCounts: {}, jobCounts: {}, totalCounts: {} }
+export const EMPTY_CARRY_IN: CarryIn = {
+  assignments: {},
+  shiftTypeCounts: {},
+  jobCounts: {},
+  weekendHolidayCounts: {},
+  pairCounts: {},
+  regularWorkDates: [],
+  totalCounts: {},
+}

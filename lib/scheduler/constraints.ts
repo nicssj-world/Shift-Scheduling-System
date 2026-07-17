@@ -7,6 +7,10 @@ export type Interval = {
   startAbs: number
   endAbs: number
   isNight: boolean
+  /** Implicit Mon–Fri 08:00–16:00 regular work. It counts toward continuous
+   * hours, but is not an OT shift and is not controlled by the OT-double
+   * toggle. */
+  isRegularWork?: boolean
 }
 
 export function epochDay(date: string) {
@@ -30,6 +34,13 @@ export type PersonState = {
   workDates: Set<string>
   monthCount: number
   unavailable: Set<string>
+}
+
+const REGULAR_WORK_SLOT = { code: 'REGULAR_M', startMin: 8 * 60, endMin: 16 * 60 }
+
+export function addRegularWork(person: PersonState, date: string) {
+  person.intervals.push({ ...toInterval(date, REGULAR_WORK_SLOT), isRegularWork: true })
+  person.workDates.add(date)
 }
 
 export type CheckResult = { ok: true } | { ok: false; rule: string; reason: string }
@@ -59,14 +70,14 @@ export function checkAssignment(
       return { ok: false, rule: 'overlap', reason: `ซ้อนกับ${iv.code}วันเดียวกัน` }
     }
     // rest after a night shift ends
-    if (iv.isNight && next.startAbs >= iv.endAbs) {
+    if (!iv.isRegularWork && iv.isNight && next.startAbs >= iv.endAbs) {
       const gap = next.startAbs - iv.endAbs
       if (gap < config.minRestHoursAfterNight * 60) {
         return { ok: false, rule: 'rest_after_night', reason: `พักหลังเวรดึกน้อยกว่า ${config.minRestHoursAfterNight} ชม.` }
       }
     }
     // the new shift is a night shift: person must still get rest before a later shift
-    if (next.isNight && iv.startAbs >= next.endAbs) {
+    if (!iv.isRegularWork && next.isNight && iv.startAbs >= next.endAbs) {
       const gap = iv.startAbs - next.endAbs
       if (gap < config.minRestHoursAfterNight * 60) {
         return { ok: false, rule: 'rest_after_night', reason: `เวรถัดไปเริ่มเร็วเกินหลังเวรดึก` }
@@ -77,18 +88,18 @@ export function checkAssignment(
   // contiguous run containing the new interval
   let runStart = next.startAbs
   let runEnd = next.endAbs
-  let runShifts = 1
+  let runOvertimeShifts = 1
   let extended = true
   while (extended) {
     extended = false
     for (const iv of person.intervals) {
       if (iv.endAbs === runStart) {
         runStart = iv.startAbs
-        runShifts += 1
+        if (!iv.isRegularWork) runOvertimeShifts += 1
         extended = true
       } else if (iv.startAbs === runEnd) {
         runEnd = iv.endAbs
-        runShifts += 1
+        if (!iv.isRegularWork) runOvertimeShifts += 1
         extended = true
       }
     }
@@ -96,7 +107,7 @@ export function checkAssignment(
   if (runEnd - runStart > MAX_CONTIGUOUS_MIN) {
     return { ok: false, rule: 'max_consecutive_hours', reason: 'เกิน 16 ชั่วโมงติดต่อกัน' }
   }
-  if (runShifts > 1 && !config.allowAfternoonNightDouble) {
+  if (runOvertimeShifts > 1 && !config.allowAfternoonNightDouble) {
     return { ok: false, rule: 'double_shift', reason: 'ไม่อนุญาตเวรควบ (ติดต่อกัน 2 เวร)' }
   }
 

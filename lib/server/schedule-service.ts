@@ -2,7 +2,7 @@ import 'server-only'
 
 import { datesOfMonth } from '@/lib/dates'
 import { generateSchedule } from '@/lib/scheduler/engine'
-import { addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
+import { addRegularWork, addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
 import { consecutiveWorkDaysBefore, emptyStats, fairnessScore } from '@/lib/scheduler/fairness'
 import type { AssignmentDraft, SchedulerInput, Violation } from '@/lib/scheduler/types'
 import { validateAssignments } from '@/lib/scheduler/validate'
@@ -134,6 +134,7 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
     if (daySet.has(d)) weekDates.push(d)
   }
   const dayClass = ctx.days.find((d) => d.date === date)?.dayClass ?? 'weekday'
+  const dayClassByDate = new Map(ctx.days.map((day) => [day.date, day.dayClass]))
   const slotByCode = new Map(ctx.slots.map((s) => [s.code, s]))
 
   return ctx.members.map((member) => {
@@ -143,7 +144,14 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       monthCount: 0,
       unavailable: new Set(ctx.unavailable[member.user_id] ?? []),
     }
+    for (const day of ctx.days) {
+      if (day.dayClass === 'weekday' && !state.unavailable.has(day.date)) addRegularWork(state, day.date)
+    }
+    for (const regularDate of ctx.carryIn.regularWorkDates) addRegularWork(state, regularDate)
     const stats = emptyStats()
+    stats.byType = { ...(ctx.carryIn.shiftTypeCounts[member.user_id] ?? {}) }
+    stats.byJob = { ...(ctx.carryIn.jobCounts[member.user_id] ?? {}) }
+    stats.weekendHoliday = ctx.carryIn.weekendHolidayCounts[member.user_id] ?? 0
     for (const a of drafts) {
       if (a.userId !== member.user_id) continue
       const s = slotByCode.get(a.code)
@@ -151,6 +159,7 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       addToPerson(state, a.date, s)
       stats.total += 1
       stats.byType[a.code] = (stats.byType[a.code] ?? 0) + 1
+      if (dayClassByDate.get(a.date) !== 'weekday') stats.weekendHoliday += 1
     }
     for (const carry of ctx.carryIn.assignments[member.user_id] ?? []) {
       const s = slotByCode.get(carry.code)
@@ -171,9 +180,12 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       total: stats.total,
       ok: check.ok,
       reason: check.ok ? null : check.reason,
-      score: fairnessScore(stats, slot.code, dayClass, consecutiveWorkDaysBefore(state.workDates, date), ctx.config.weights),
+      score: fairnessScore(
+        stats, slot.code, dayClass, consecutiveWorkDaysBefore(state.workDates, date), ctx.config.weights,
+        ctx.carryIn.totalCounts[member.user_id] ?? 0,
+      ),
     }
-  }).sort((a, b) => Number(b.ok) - Number(a.ok) || a.score - b.score || a.displayName.localeCompare(b.displayName))
+  }).sort((a, b) => Number(b.ok) - Number(a.ok) || a.total - b.total || a.score - b.score || a.displayName.localeCompare(b.displayName))
 }
 
 /** Full bundle for the roster views. Fetches everything for one team/month

@@ -1,12 +1,16 @@
 import { z } from 'zod'
 import { requireActor } from '@/lib/server/auth'
+import { assertOwnerChangesValid } from '@/lib/server/assignment-changes'
 import { getShiftTypes } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
 import { parseHistoryFilter } from '@/lib/server/pagination'
+import { assertAssignmentsHaveNoPendingRequest } from '@/lib/server/request-conflicts'
+import { getRequestEvents } from '@/lib/server/request-events'
+import { throwRequestRpcError } from '@/lib/server/request-rpc'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { thaiShortDate } from '@/lib/dates'
+import { bangkokDateString, thaiShortDate } from '@/lib/dates'
 import type { Actor } from '@/lib/types'
 
 async function joinSaleDetails(rows: Record<string, unknown>[]) {
@@ -14,10 +18,11 @@ async function joinSaleDetails(rows: Record<string, unknown>[]) {
   if (rows.length === 0) return []
   const saleIds = rows.map((r) => String(r.id))
   const userIds = [...new Set(rows.flatMap((r) => [String(r.seller_id), String(r.buyer_id)]))]
-  const [{ data: items }, { data: profiles }, shiftTypes] = await Promise.all([
+  const [{ data: items }, { data: profiles }, shiftTypes, eventsByRequest] = await Promise.all([
     admin.from('shift_sale_items').select('sale_request_id,assignment_id').in('sale_request_id', saleIds),
     admin.from('profiles').select('id,name').in('id', userIds),
     getShiftTypes(),
+    getRequestEvents('sale', saleIds),
   ])
   const assignmentIds = [...new Set((items ?? []).map((i) => String(i.assignment_id)))]
   const { data: assignments } = assignmentIds.length > 0
@@ -49,6 +54,7 @@ async function joinSaleDetails(rows: Record<string, unknown>[]) {
       sellerName: nameById.get(String(r.seller_id)) ?? '',
       buyerName: nameById.get(String(r.buyer_id)) ?? '',
       shifts,
+      events: eventsByRequest.get(String(r.id)) ?? [],
     }
   })
 }
@@ -99,7 +105,8 @@ export async function GET(request: Request) {
 }
 
 const createSchema = z.object({
-  assignmentIds: z.array(z.string().uuid()).min(1).max(31),
+  assignmentIds: z.array(z.string().uuid()).min(1).max(31)
+    .refine((ids) => new Set(ids).size === ids.length, 'มีรายการเวรซ้ำกัน'),
   buyerId: z.string().uuid(),
   reason: z.string().max(500).optional(),
 })
@@ -118,11 +125,20 @@ export async function POST(request: Request) {
     if (error) throw new HttpError(500, error.message)
     if (!assignments || assignments.length !== body.assignmentIds.length) throw new HttpError(404, 'ไม่พบเวรที่เลือกบางรายการ')
     if (assignments.some((a) => String(a.user_id) !== actor.id)) throw new HttpError(403, 'เลือกได้เฉพาะเวรของตัวเอง')
+    const today = bangkokDateString()
+    if (assignments.some((assignment) => String(assignment.work_date) < today)) {
+      throw new HttpError(400, 'เลือกได้เฉพาะเวรวันนี้หรือในอนาคต')
+    }
 
     const scheduleIds = [...new Set(assignments.map((a) => String(a.schedule_id)))]
-    const { data: schedules } = await admin.from('shift_schedules').select('id,status,team_id').in('id', scheduleIds)
+    if (scheduleIds.length > 1) {
+      throw new HttpError(400, 'ขายเวรได้เฉพาะภายในตารางเดือนเดียวกันต่อคำขอ')
+    }
+    const { data: schedules, error: schedulesError } = await admin.from('shift_schedules').select('id,status,team_id').in('id', scheduleIds)
+    if (schedulesError || !schedules || schedules.length !== scheduleIds.length) throw new HttpError(409, 'ไม่พบตารางเวรที่เกี่ยวข้อง')
     for (const s of schedules ?? []) {
       if (String(s.status) === 'locked') throw new HttpError(409, 'ตารางเวรถูกล็อคแล้ว ไม่สามารถขายเวรได้')
+      if (String(s.status) !== 'published') throw new HttpError(409, 'ขายได้เฉพาะเวรในตารางที่เผยแพร่แล้ว')
     }
     const teamIds = [...new Set((schedules ?? []).map((s) => String(s.team_id)))]
     if (teamIds.length > 1) throw new HttpError(400, 'ขายเวรได้เฉพาะภายในทีมเดียวกัน')
@@ -133,17 +149,20 @@ export async function POST(request: Request) {
       .maybeSingle()
     if (!buyerMembership) throw new HttpError(400, 'ผู้ซื้อต้องเป็นสมาชิกทีมเดียวกัน')
 
-    const { data: saleRequestRow, error: insertError } = await admin
-      .from('shift_sale_requests')
-      .insert({ seller_id: actor.id, buyer_id: body.buyerId, reason: body.reason ?? null })
-      .select('*')
-      .single()
-    if (insertError) throw new HttpError(500, insertError.message)
-    const saleRequest = saleRequestRow as { id: string }
+    await assertAssignmentsHaveNoPendingRequest(assignments.map((assignment) => String(assignment.id)))
+    await assertOwnerChangesValid(assignments.map((assignment) => ({
+      assignmentId: String(assignment.id),
+      scheduleId: String(assignment.schedule_id),
+      newUserId: body.buyerId,
+    })))
 
-    const itemRows = assignments.map((a) => ({ sale_request_id: saleRequest.id, assignment_id: a.id }))
-    const { error: itemsError } = await admin.from('shift_sale_items').insert(itemRows)
-    if (itemsError) throw new HttpError(500, itemsError.message)
+    const { data: saleRequest, error: insertError } = await admin.rpc('shift_create_sale_request', {
+      p_assignment_ids: assignments.map((assignment) => String(assignment.id)),
+      p_seller_id: actor.id,
+      p_buyer_id: body.buyerId,
+      p_reason: body.reason ?? null,
+    })
+    if (insertError) throwRequestRpcError(insertError, 'สร้างคำขอขายเวรไม่สำเร็จ')
 
     const firstDate = [...assignments].sort((a, b) => String(a.work_date).localeCompare(String(b.work_date)))[0]
     await notifyUsers([body.buyerId], {

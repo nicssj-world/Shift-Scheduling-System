@@ -4,6 +4,7 @@ import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
 import { readJson, respond } from '@/lib/server/route'
 import { getSchedule, getTeam, getTeamMembers } from '@/lib/server/data'
+import { loadScheduleContext, validateSchedule } from '@/lib/server/schedule-service'
 import { getAdminClient } from '@/lib/supabase/admin'
 import { thaiMonthLabel } from '@/lib/dates'
 
@@ -23,6 +24,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
     if (action === 'publish') {
       if (schedule.status === 'locked') throw new HttpError(409, 'ตารางถูกล็อคแล้ว')
+      const ctx = await loadScheduleContext(id)
+      const hardErrors = (await validateSchedule(ctx)).filter((violation) => violation.severity === 'error')
+      if (hardErrors.length > 0) {
+        throw new HttpError(
+          409,
+          `ยังเผยแพร่ไม่ได้: ตารางมีข้อผิดพลาด ${hardErrors.length} จุด กรุณาแก้ไขหรือสร้างตารางอัตโนมัติใหม่ก่อน`,
+        )
+      }
       const { error } = await admin.from('shift_schedules')
         .update({ status: 'published', published_at: now, published_by: actor.id }).eq('id', id)
       if (error) throw new HttpError(500, error.message)
@@ -40,6 +49,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (error) throw new HttpError(500, error.message)
     } else if (action === 'lock') {
       if (schedule.status === 'draft') throw new HttpError(409, 'ต้องเผยแพร่ก่อนจึงจะล็อคได้')
+      const ctx = await loadScheduleContext(id)
+      const hardErrors = (await validateSchedule(ctx)).filter((violation) => violation.severity === 'error')
+      if (hardErrors.length > 0) {
+        throw new HttpError(409, `ยังล็อคไม่ได้: ตารางมีข้อผิดพลาด ${hardErrors.length} จุด`)
+      }
       const { error } = await admin.from('shift_schedules')
         .update({ status: 'locked', locked_at: now, locked_by: actor.id }).eq('id', id)
       if (error) throw new HttpError(500, error.message)
