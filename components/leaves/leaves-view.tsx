@@ -7,11 +7,11 @@ import {
 import { Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import {
-  bangkokDateString, bangkokMonthNow, datesOfMonth, dayOfWeek, nextMonth,
+  addDays, bangkokDateString, bangkokMonthNow, datesOfMonth, dayOfWeek, nextMonth,
   previousMonth, thaiMonthLabel, thaiShortDate, THAI_DAYS_SHORT,
 } from '@/lib/dates'
 import {
-  ATTENDANCE_CODE_SHORT, ATTENDANCE_CODE_TH, ATTENDANCE_CODES, ATTENDANCE_REPORT_CATEGORIES,
+  ATTENDANCE_CODE_SHORT, ATTENDANCE_CODE_TH, ATTENDANCE_CODES, ATTENDANCE_REPORT_CATEGORIES, attendanceReportValue,
   ATTENDANCE_REPORT_CATEGORY_TH, DEPARTMENTS, type AttendanceCode, type AttendanceReportCategory,
   type Holiday,
 } from '@/lib/types'
@@ -47,6 +47,15 @@ type AttendanceRecordView = {
   userDept: string | null
   positionTitle: string | null
   employmentType: string | null
+}
+
+type MineRecordGroup = {
+  code: AttendanceCode
+  startDate: string
+  endDate: string
+  totalDays: number
+  note: string | null
+  records: AttendanceRecordView[]
 }
 
 type GridResponse = {
@@ -167,6 +176,10 @@ function isWeekendDate(date: string) {
   return weekday === 0 || weekday === 6
 }
 
+function attendanceCountUnit(code: AttendanceCode) {
+  return code === 'late' || code === 'early' ? 'ครั้ง' : 'วัน'
+}
+
 function SyncedTableScroll({ children, label, className = '' }: {
   children: ReactNode
   label: string
@@ -233,8 +246,9 @@ export function LeavesView() {
   const [mineRecords, setMineRecords] = useState<AttendanceRecordView[]>([])
   const [mineTotals, setMineTotals] = useState<Record<AttendanceReportCategory, number>>(emptyTotals())
   const [nextCursor, setNextCursor] = useState<string | null>(null)
-  const [mineFrom, setMineFrom] = useState('')
-  const [mineTo, setMineTo] = useState('')
+  const [mineFrom, setMineFrom] = useState(() => fiscalYearRange(fiscalYearForDate(bangkokDateString())).from)
+  const [mineTo, setMineTo] = useState(() => fiscalYearRange(fiscalYearForDate(bangkokDateString())).to)
+  const [showLateRecords, setShowLateRecords] = useState(false)
   const [canManage, setCanManage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [mineLoading, setMineLoading] = useState(false)
@@ -262,6 +276,7 @@ export function LeavesView() {
   const holidayRequestId = useRef(0)
 
   const dates = useMemo(() => datesOfMonth(month), [month])
+  const mineSummaryFiscalYear = thaiFiscalYear(fiscalYearForDate(mineFrom || bangkokDateString()))
 
   const loadGrid = useCallback(async () => {
     setLoading(true)
@@ -726,6 +741,52 @@ export function LeavesView() {
     return map
   }, [grid?.records])
 
+  const groupedMineRecords = useMemo(() => {
+    const merged: MineRecordGroup[] = []
+    const recordsByType = new Map<string, AttendanceRecordView[]>()
+    const sourceRecords = showLateRecords ? mineRecords : mineRecords.filter((record) => record.code !== 'late')
+
+    for (const record of sourceRecords) {
+      const key = `${record.code}|${record.note ?? ''}`
+      recordsByType.set(key, [...(recordsByType.get(key) ?? []), record])
+    }
+
+    for (const records of recordsByType.values()) {
+      const sortedRecords = [...records].sort((a, b) => a.record_date.localeCompare(b.record_date))
+      for (const record of sortedRecords) {
+        const previous = merged[merged.length - 1]
+        const canMerge = previous && record.code !== 'late' && previous.code === record.code
+          && (previous.note ?? '') === (record.note ?? '')
+          && record.record_date === addDays(previous.endDate, 1)
+
+        if (canMerge) {
+          previous.records.push(record)
+          previous.endDate = record.record_date
+          previous.totalDays += attendanceReportValue(record.code)
+        } else {
+          merged.push({
+            code: record.code,
+            startDate: record.record_date,
+            endDate: record.record_date,
+            totalDays: attendanceReportValue(record.code),
+            note: record.note,
+            records: [record],
+          })
+        }
+      }
+    }
+
+    const byMonth = new Map<string, MineRecordGroup[]>()
+    for (const group of merged.sort((a, b) => {
+      const dateOrder = b.startDate.localeCompare(a.startDate)
+      return dateOrder || a.code.localeCompare(b.code)
+    })) {
+      const monthKey = group.startDate.slice(0, 7)
+      byMonth.set(monthKey, [...(byMonth.get(monthKey) ?? []), group])
+    }
+    return [...byMonth.entries()]
+  }, [mineRecords, showLateRecords])
+
   const departments = useMemo(() => {
     const source = tab === 'vacation' ? (vacationData?.rows ?? []) : people
     const values = new Set(source.map((person) => groupName(person.dept)))
@@ -734,11 +795,12 @@ export function LeavesView() {
     return result
   }, [people, tab, vacationData?.rows])
 
-  const vacationSummary = useMemo(() => (vacationData?.rows ?? []).reduce((summary, row) => ({
-    total: summary.total + row.totalDays,
-    used: summary.used + row.usedDays,
-    remaining: summary.remaining + row.remainingDays,
-  }), { total: 0, used: 0, remaining: 0 }), [vacationData?.rows])
+  function renderMineRecordActions(record: AttendanceRecordView) {
+    return <span className="inline-flex gap-1">
+      <Button size="sm" variant="outline" className="min-h-11 min-w-11 justify-center" onClick={() => openEdit(record)} aria-label={`แก้ไขรายการ ${thaiShortDate(record.record_date)}`}><Edit3 size={14} /></Button>
+      <Button size="sm" variant="danger" className="min-h-11 min-w-11 justify-center" onClick={() => setDeleteTarget(record)} aria-label={`ลบรายการ ${thaiShortDate(record.record_date)}`}><Trash2 size={14} /></Button>
+    </span>
+  }
 
   function handleCellKeyDown(event: KeyboardEvent<HTMLDivElement>, userId: string, date: string) {
     if (!canManage || (event.key !== 'Enter' && event.key !== ' ')) return
@@ -755,7 +817,7 @@ export function LeavesView() {
           </h1>
           <p className="mt-1 max-w-3xl text-[13px] text-slate-600">ธุรการบันทึกข้อมูลแทนบุคลากร เพื่อให้ทุกคนตรวจสอบวันลา มาสาย และกลับก่อนของตนเองได้ ข้อมูลนี้ไม่มีผลต่อการจัดเวร</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
           {canManage && <>
             {tab !== 'vacation' && <Button className="min-h-11" onClick={() => openCreate()}><Plus size={16} /> เพิ่มรายการ</Button>}
             <Button variant="outline" className="min-h-11" onClick={openRosterManager}><Users size={16} /> จัดการรายชื่อ</Button>
@@ -821,7 +883,7 @@ export function LeavesView() {
           </div>
 
           {loading ? <Spinner /> : groupedPeople.length === 0 ? <EmptyState text="ไม่พบบุคลากรตามตัวกรอง" /> : (
-            <SyncedTableScroll label="ตารางทะเบียนรายเดือน เลื่อนซ้ายขวาเพื่อดูวันที่" className="rounded-xl border border-line bg-white">
+            <SyncedTableScroll label="ตารางทะเบียนรายเดือน เลื่อนซ้ายขวาเพื่อดูวันที่" className="max-h-[70vh] overflow-auto rounded-xl border border-line bg-white">
               <table className="min-w-[1780px] border-separate border-spacing-0 text-xs tabular-nums">
                 <thead>
                   <tr>
@@ -922,11 +984,10 @@ export function LeavesView() {
               <Field label="ถึงวันที่"><input type="date" className={inputCls} value={mineTo} min={mineFrom} onChange={(e) => setMineTo(e.target.value)} /></Field>
               <Button className="min-h-11" onClick={() => loadMine()} disabled={mineLoading}><Filter size={15} /> แสดงประวัติ</Button>
             </div>
-            <p className="text-xs text-slate-500">ประวัตินี้เป็นรายการที่ธุรการบันทึกในทะเบียน ไม่ใช่คำขอลาหรือสถานะอนุมัติ</p>
           </Card>
 
           <Card>
-            <h2 className="mb-3 text-sm font-bold">สรุปของฉันในช่วงที่เลือก</h2>
+            <h2 className="mb-3 text-sm font-bold">สรุปวันลา ปีงบประมาณ {mineSummaryFiscalYear}</h2>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
               {ATTENDANCE_REPORT_CATEGORIES.map((category) => (
                 <div key={category} className="rounded-xl border border-line bg-slate-50 px-3 py-2 text-center">
@@ -938,21 +999,71 @@ export function LeavesView() {
           </Card>
 
           <Card className="overflow-x-auto">
-            <h2 className="mb-3 text-sm font-bold">ประวัติย้อนหลัง</h2>
-            {mineLoading && mineRecords.length === 0 ? <Spinner /> : mineRecords.length === 0 ? <EmptyState text="ยังไม่มีรายการในช่วงที่เลือก" /> : (
-              <table className="w-full min-w-[680px] text-[13px]">
-                <thead><tr className="border-b border-line text-left text-xs text-slate-600"><th className="py-2">วันที่</th><th>รหัส</th><th>รายละเอียด</th><th>แหล่งข้อมูล</th><th className="text-right">การจัดการ</th></tr></thead>
-                <tbody>
-                  {mineRecords.map((record) => (
-                    <tr key={record.id} className="border-b border-line/70 align-top">
-                      <td className="py-2 font-semibold tabular-nums">{thaiShortDate(record.record_date)}</td>
-                      <td className="py-2"><span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 font-bold ${CODE_SURFACE[record.code]}`}>{ATTENDANCE_CODE_SHORT[record.code]} <span className="font-normal">{ATTENDANCE_CODE_TH[record.code]}</span></span></td>
-                      <td className="py-2 text-slate-700">{record.note ?? <span className="text-slate-400">ไม่มีหมายเหตุ</span>}</td>
-                      <td className="py-2 text-slate-600">{record.source === 'excel' ? 'นำเข้าจาก Excel' : 'ธุรการบันทึก'}</td>
-                      <td className="py-2 text-right">{canManage && <span className="inline-flex gap-1"><Button size="sm" variant="outline" className="min-h-11 min-w-11 justify-center" onClick={() => openEdit(record)} aria-label={`แก้ไขรายการ ${thaiShortDate(record.record_date)}`}><Edit3 size={14} /></Button><Button size="sm" variant="danger" className="min-h-11 min-w-11 justify-center" onClick={() => setDeleteTarget(record)} aria-label={`ลบรายการ ${thaiShortDate(record.record_date)}`}><Trash2 size={14} /></Button></span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-bold">ประวัติย้อนหลัง</h2>
+              <Button
+                size="sm"
+                variant="outline"
+                className="min-h-11"
+                aria-pressed={showLateRecords}
+                onClick={() => setShowLateRecords((visible) => !visible)}
+              >
+                {showLateRecords ? 'ซ่อนรายการสาย' : `แสดงรายการสาย${mineTotals.late > 0 ? ` (${formatCount(mineTotals.late)})` : ''}`}
+              </Button>
+            </div>
+            {mineLoading && mineRecords.length === 0 ? <Spinner /> : mineRecords.length === 0 ? <EmptyState text="ยังไม่มีรายการในช่วงที่เลือก" /> : groupedMineRecords.length === 0 ? (
+              <div className="rounded-xl border border-line bg-slate-50 px-3 py-4 text-sm text-slate-600">รายการสายถูกซ่อนไว้ กด “แสดงรายการสาย” เพื่อดูรายการ</div>
+            ) : (
+              <table className="w-full min-w-[900px] text-[13px]">
+                <thead>
+                  <tr className="border-b border-line text-left text-xs text-slate-600">
+                    <th className="whitespace-nowrap px-3 py-2">วันที่</th>
+                    <th className="whitespace-nowrap px-3 py-2">รหัส</th>
+                    <th className="w-36 min-w-36 whitespace-nowrap px-3 py-2 text-right">จำนวนวัน/ครั้ง</th>
+                    <th className="min-w-48 border-l border-line px-4 py-2">รายละเอียด</th>
+                    {canManage && <th className="min-w-32 whitespace-nowrap px-3 py-2 text-right">การจัดการ</th>}
+                  </tr>
+                </thead>
+                {groupedMineRecords.map(([monthKey, groups]) => {
+                  const monthRecordCount = groups.reduce((total, group) => total + group.records.length, 0)
+                  return (
+                    <tbody key={monthKey}>
+                      <tr className="border-y border-sky-100 bg-sky-50">
+                        <th colSpan={canManage ? 5 : 4} scope="rowgroup" className="px-3 py-2 text-left">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="font-bold text-sky-950">{thaiMonthLabel(monthKey)}</span>
+                            <span className="text-xs font-medium text-sky-800">{monthRecordCount} รายการ</span>
+                          </div>
+                        </th>
+                      </tr>
+                      {groups.map((group) => (
+                        <tr key={`${group.startDate}|${group.code}|${group.note ?? ''}`} className="border-b border-line/70 align-top">
+                          <td className="whitespace-nowrap px-3 py-2 font-semibold tabular-nums">
+                            {group.startDate === group.endDate ? thaiShortDate(group.startDate) : `${thaiShortDate(group.startDate)} – ${thaiShortDate(group.endDate)}`}
+                          </td>
+                          <td className="px-3 py-2"><span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 font-bold ${CODE_SURFACE[group.code]}`}>{ATTENDANCE_CODE_SHORT[group.code]} <span className="font-normal">{ATTENDANCE_CODE_TH[group.code]}</span></span></td>
+                          <td className="w-36 min-w-36 whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums">{formatCount(group.totalDays)} {attendanceCountUnit(group.code)}</td>
+                          <td className="min-w-48 border-l border-line/70 px-4 py-2 text-slate-700">{group.note ?? <span className="text-slate-400">ไม่มีหมายเหตุ</span>}</td>
+                          {canManage && <td className="min-w-32 px-3 py-2 text-right align-top">
+                            {group.records.length === 1 ? renderMineRecordActions(group.records[0]) : (
+                              <details className="text-left">
+                                <summary className="flex min-h-11 cursor-pointer items-center justify-end rounded-xl border border-line px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">จัดการ {group.records.length} วัน</summary>
+                                <div className="mt-1 flex min-w-56 flex-col gap-1 rounded-xl border border-line bg-white p-2 shadow-sm">
+                                  {group.records.map((record) => (
+                                    <div key={record.id} className="flex items-center justify-between gap-2 border-b border-line/70 py-1 last:border-0">
+                                      <span className="whitespace-nowrap text-xs font-medium text-slate-700">{thaiShortDate(record.record_date)}</span>
+                                      {renderMineRecordActions(record)}
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
+                          </td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  )
+                })}
               </table>
             )}
             {nextCursor && <div className="mt-3 flex justify-center"><Button variant="outline" className="min-h-11" disabled={mineLoading} onClick={() => loadMine(nextCursor, true)}>{mineLoading ? 'กำลังโหลด…' : 'โหลดรายการถัดไป'}</Button></div>}
@@ -987,9 +1098,6 @@ export function LeavesView() {
                 )}
               </div>
             </div>
-            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
-              กรอก “คงเหลือจากปีงบก่อน” และ “สิทธิ์ปีงบปัจจุบัน” ทีละ 0.5 วัน ระบบจะรวมสิทธิ์และหักยอดพักร้อนจากทะเบียนรายวันให้อัตโนมัติ
-            </div>
             <div className="flex flex-wrap gap-2">
               <div className="relative min-w-56 flex-1 sm:flex-none">
                 <Search size={15} className="pointer-events-none absolute left-3 top-3 text-slate-400" />
@@ -1005,21 +1113,6 @@ export function LeavesView() {
             </div>
           </Card>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <Card className="border-sky-200 bg-sky-50">
-              <div className="text-xs font-semibold text-sky-800">รวมสิทธิ์ทั้งหมด</div>
-              <div className="mt-1 text-2xl font-bold tabular-nums text-sky-950">{formatCount(vacationSummary.total)} <span className="text-sm font-semibold">วัน</span></div>
-            </Card>
-            <Card className="border-violet-200 bg-violet-50">
-              <div className="text-xs font-semibold text-violet-800">ใช้พักร้อนแล้ว</div>
-              <div className="mt-1 text-2xl font-bold tabular-nums text-violet-950">{formatCount(vacationSummary.used)} <span className="text-sm font-semibold">วัน</span></div>
-            </Card>
-            <Card className="border-emerald-200 bg-emerald-50">
-              <div className="text-xs font-semibold text-emerald-800">คงเหลือทั้งหมด</div>
-              <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-950">{formatCount(vacationSummary.remaining)} <span className="text-sm font-semibold">วัน</span></div>
-            </Card>
-          </div>
-
           <Card className="p-0">
             {vacationLoading ? <Spinner /> : groupedVacationRows.length === 0 ? <EmptyState text="ไม่พบบุคลากรตามตัวกรอง" /> : (
               <SyncedTableScroll label="ตารางสิทธิ์ลาพักร้อน เลื่อนซ้ายขวาเพื่อดูทุกคอลัมน์" className="rounded-xl">
@@ -1032,13 +1125,13 @@ export function LeavesView() {
                       <th className="min-w-[130px] border-b border-line bg-sky-100 px-3 py-3 text-right text-sky-950">รวมพักร้อน</th>
                       <th className="min-w-[110px] border-b border-line bg-slate-100 px-3 py-3 text-right">ใช้แล้ว</th>
                       <th className="min-w-[120px] border-b border-line bg-emerald-100 px-3 py-3 text-right text-emerald-950">คงเหลือ</th>
-                      <th className="min-w-[110px] border-b border-line bg-slate-100 px-3 py-3 text-right">บันทึก</th>
+                      {canManage && <th className="min-w-[110px] border-b border-line bg-slate-100 px-3 py-3 text-right">บันทึก</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {groupedVacationRows.map(([department, departmentRows]) => (
                       <Fragment key={department}>
-                        <tr><th colSpan={7} className="border-b border-amber-200 bg-amber-100 px-3 py-2 text-left font-bold text-amber-950">{department} <span className="font-normal text-amber-800">· {departmentRows.length} คน</span></th></tr>
+                        <tr><th colSpan={canManage ? 7 : 6} className="border-b border-amber-200 bg-amber-100 px-3 py-2 text-left font-bold text-amber-950">{department} <span className="font-normal text-amber-800">· {departmentRows.length} คน</span></th></tr>
                         {departmentRows.map((row) => {
                           const values = vacationDraftValues(row)
                           const validDraft = [values.previousDays, values.currentDays].every((value) => Number.isFinite(value))
@@ -1074,13 +1167,13 @@ export function LeavesView() {
                               <td className={`border-b px-3 py-2 text-right font-bold ${remainingDays < 0 ? 'border-red-100 bg-red-50 text-red-800' : 'border-emerald-100 bg-emerald-50 text-emerald-900'}`}>
                                 {formatCount(remainingDays)}{remainingDays < 0 && <span className="ml-1 block text-[10px] font-semibold">เกินสิทธิ์</span>}
                               </td>
-                              <td className="border-b border-line px-3 py-2 text-right">
-                                {canManage ? <Button
+                              {canManage && <td className="border-b border-line px-3 py-2 text-right">
+                                <Button
                                   size="sm" className="min-h-11"
                                   disabled={!dirty || savingVacationUserId === row.userId || !validDraft}
                                   onClick={() => saveVacationBalance(row)}
-                                ><Save size={14} />{savingVacationUserId === row.userId ? 'กำลังบันทึก…' : 'บันทึก'}</Button> : <span className="text-xs text-slate-400">ดูอย่างเดียว</span>}
-                              </td>
+                                ><Save size={14} />{savingVacationUserId === row.userId ? 'กำลังบันทึก…' : 'บันทึก'}</Button>
+                              </td>}
                             </tr>
                           )
                         })}

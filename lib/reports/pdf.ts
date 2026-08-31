@@ -93,10 +93,14 @@ function reportNumber(value: number) {
 /** A4 landscape attendance register summary matching the supplied workbook. */
 export function buildAttendancePdf(rows: AttendanceReportRow[], from: string, to: string) {
   const doc = createThaiDoc('landscape')
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const tableMargin = { left: 6, right: 6, bottom: 9 }
+  const tableWidth = pageWidth - tableMargin.left - tableMargin.right
   doc.setFontSize(15)
-  doc.text(`สรุปวันลาและการมาปฏิบัติงาน ${thaiReportDate(from)} – ${thaiReportDate(to)}`, 148, 11, { align: 'center' })
+  doc.text(`สรุปวันลาและการมาปฏิบัติงาน ${thaiReportDate(from)} – ${thaiReportDate(to)}`, pageWidth / 2, 11, { align: 'center' })
   doc.setFontSize(9)
-  doc.text('กลุ่มงานเทคนิคการแพทย์ โรงพยาบาลชลบุรี', 148, 17, { align: 'center' })
+  doc.text('กลุ่มงานเทคนิคการแพทย์ โรงพยาบาลชลบุรี', pageWidth / 2, 17, { align: 'center' })
 
   const orderedDepartments = [...new Set(rows.map((row) => reportDepartment(row.dept)))].sort((a, b) => {
     const aIndex = DEPARTMENTS.indexOf(a as (typeof DEPARTMENTS)[number])
@@ -122,6 +126,29 @@ export function buildAttendancePdf(rows: AttendanceReportRow[], from: string, to
     }
   }
 
+  doc.setFontSize(8.2)
+  const longestPositionWidth = rows.reduce((max, row) => {
+    const text = row.positionTitle?.trim() || '-'
+    return Math.max(max, doc.getTextWidth(text) + 4)
+  }, 0)
+  const basePositionWidth = Math.min(Math.max(52, longestPositionWidth), 76)
+  const baseColumnWidths = {
+    sequence: 10,
+    name: 48,
+    position: basePositionWidth,
+    employment: 38,
+    number: 15,
+  }
+  const baseFlexibleWidth = baseColumnWidths.name + baseColumnWidths.position + baseColumnWidths.employment + (baseColumnWidths.number * 7)
+  const flexibleScale = (tableWidth - baseColumnWidths.sequence) / baseFlexibleWidth
+  const columnWidths = {
+    sequence: baseColumnWidths.sequence,
+    name: baseColumnWidths.name * flexibleScale,
+    position: baseColumnWidths.position * flexibleScale,
+    employment: baseColumnWidths.employment * flexibleScale,
+    number: baseColumnWidths.number * flexibleScale,
+  }
+
   autoTable(doc, {
     startY: 21,
     head: [['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'ประเภทการจ้าง', 'พัก', 'ป่วย', 'กิจ', 'ขาด', 'สาย', 'ก่อน', 'คลอด']],
@@ -135,18 +162,19 @@ export function buildAttendancePdf(rows: AttendanceReportRow[], from: string, to
     // table on that face prevents jsPDF from falling back to a Latin font for
     // Thai glyphs when a synthetic bold face is requested.
     headStyles: { fillColor: [66, 135, 185], textColor: [255, 255, 255], fontStyle: 'normal', halign: 'center' },
+    tableWidth,
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 39 },
-      2: { cellWidth: 36 },
-      3: { cellWidth: 28 },
-      4: { cellWidth: 13, halign: 'center' },
-      5: { cellWidth: 13, halign: 'center' },
-      6: { cellWidth: 13, halign: 'center' },
-      7: { cellWidth: 13, halign: 'center' },
-      8: { cellWidth: 13, halign: 'center' },
-      9: { cellWidth: 13, halign: 'center' },
-      10: { cellWidth: 13, halign: 'center' },
+      0: { cellWidth: columnWidths.sequence, halign: 'center' },
+      1: { cellWidth: columnWidths.name },
+      2: { cellWidth: columnWidths.position },
+      3: { cellWidth: columnWidths.employment },
+      4: { cellWidth: columnWidths.number, halign: 'center' },
+      5: { cellWidth: columnWidths.number, halign: 'center' },
+      6: { cellWidth: columnWidths.number, halign: 'center' },
+      7: { cellWidth: columnWidths.number, halign: 'center' },
+      8: { cellWidth: columnWidths.number, halign: 'center' },
+      9: { cellWidth: columnWidths.number, halign: 'center' },
+      10: { cellWidth: columnWidths.number, halign: 'center' },
     },
     didParseCell(cell: CellHookData) {
       if (cell.section === 'head' && cell.column.index >= 4) {
@@ -162,9 +190,9 @@ export function buildAttendancePdf(rows: AttendanceReportRow[], from: string, to
     didDrawPage(data) {
       doc.setFontSize(7)
       doc.setTextColor(90, 105, 115)
-      doc.text(`หน้า ${data.pageNumber}`, 291, 202, { align: 'right' })
+      doc.text(`หน้า ${data.pageNumber}`, pageWidth - tableMargin.right, pageHeight - 5, { align: 'right' })
     },
-    margin: { left: 6, right: 6, bottom: 9 },
+    margin: tableMargin,
   })
 
   return doc

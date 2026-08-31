@@ -428,12 +428,23 @@ export async function getAttendanceHistory(
 }
 
 export async function getAttendanceReport(from: string, to: string): Promise<AttendanceReportRow[]> {
-  const { data, error } = await getAdminClient().rpc('shift_attendance_report', {
-    p_from: from,
-    p_to: to,
-  })
-  if (error) throw new HttpError(500, error.message)
-  return ((data ?? []) as Record<string, unknown>[]).map(toReportRow)
+  const admin = getAdminClient()
+  const [reportResult, rosterResult, activePeople] = await Promise.all([
+    admin.rpc('shift_attendance_report', { p_from: from, p_to: to }),
+    admin.from('shift_leave_roster').select('user_id').is('removed_at', null),
+    loadProfiles(),
+  ])
+  if (reportResult.error) throw new HttpError(500, reportResult.error.message)
+  if (rosterResult.error) throw new HttpError(500, rosterResult.error.message)
+
+  // Keep the report in sync with the people currently visible in /leaves.
+  // The database RPC also retains historical inactive profiles for audit use,
+  // but those people are no longer part of the register table.
+  const rosterIds = new Set((rosterResult.data ?? []).map((row) => String(row.user_id)))
+  const tableIds = new Set(activePeople.filter((person) => rosterIds.has(person.id)).map((person) => person.id))
+  return ((reportResult.data ?? []) as Record<string, unknown>[])
+    .filter((row) => tableIds.has(String(row.user_id)))
+    .map(toReportRow)
 }
 
 export async function getAttendanceMonthlyTotals(from: string, to: string): Promise<Array<{ month: string; total: number; late: number; early: number }>> {

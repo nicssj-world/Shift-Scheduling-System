@@ -12,7 +12,7 @@ describe('attendance PDF export', () => {
       userId: `user-${index}`,
       name: `บุคลากรทดสอบ ${index + 1}`,
       dept: DEPARTMENTS[index % DEPARTMENTS.length],
-      positionTitle: index % 2 === 0 ? 'นักเทคนิคการแพทย์' : null,
+      positionTitle: index % 2 === 0 ? (index === 0 ? 'นักเทคนิคการแพทย์ชำนาญการพิเศษ' : 'นักเทคนิคการแพทย์') : null,
       employmentType: index % 3 === 0 ? 'ข้าราชการ' : null,
       ...emptyAttendanceTotals(),
     }))
