@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Save, UserMinus, UserPlus } from 'lucide-react'
 import { Button, Card, ErrorNote, Field, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
-import type { StaffProfile } from '@/lib/types'
+import type { LeaveRecorder, StaffProfile } from '@/lib/types'
 
 type SchedulerConfig = {
   maxShiftsPerMonth: number
@@ -18,6 +18,8 @@ type SettingsData = {
   scheduler: SchedulerConfig
   swap: { requiresApproval: boolean }
   schedulers: { userId: string; name: string }[]
+  leaveRecorders: LeaveRecorder[]
+  canManageLeaveRecorders: boolean
 }
 
 export function SettingsView() {
@@ -27,6 +29,7 @@ export function SettingsView() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [addUser, setAddUser] = useState('')
+  const [addRecorder, setAddRecorder] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -75,7 +78,7 @@ export function SettingsView() {
             <input type="number" min={1} max={31} className={inputCls} value={s.maxShiftsPerMonth}
               onChange={(e) => setData({ ...data, scheduler: { ...s, maxShiftsPerMonth: Number(e.target.value) } })} />
           </Field>
-          <Field label="พักขั้นต่ำหลังเวรดึก (ชั่วโมง)">
+          <Field label="พักขั้นต่ำก่อน OT ถัดไปหลังเวรดึก (ชั่วโมง)">
             <input type="number" min={0} max={24} className={inputCls} value={s.minRestHoursAfterNight}
               onChange={(e) => setData({ ...data, scheduler: { ...s, minRestHoursAfterNight: Number(e.target.value) } })} />
           </Field>
@@ -142,6 +145,35 @@ export function SettingsView() {
             <UserPlus size={15} /> มอบหมาย
           </Button>
         </div>
+      </Card>
+
+      <Card className="flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-bold">เจ้าหน้าที่บันทึกทะเบียนวันลาและการมาปฏิบัติงาน</h2>
+          <p className="mt-1 text-xs text-slate-500">เฉพาะ Admin และรายชื่อด้านล่างเท่านั้นที่เพิ่ม แก้ไข หรือลบข้อมูลทะเบียนได้ ผู้ใช้คนอื่นยังเปิดดูได้อย่างเดียว</p>
+        </div>
+        {data.leaveRecorders.length === 0 && <div className="text-[13px] text-slate-400">ยังไม่มีผู้ได้รับมอบหมาย — Admin มีสิทธิ์สำรองเสมอ</div>}
+        {data.leaveRecorders.map((recorder) => (
+          <div key={recorder.user_id} className="flex items-center justify-between rounded-xl border border-line px-3 py-2 text-sm">
+            <div><div className="font-medium">{recorder.name}</div><div className="text-xs text-slate-500">{recorder.dept ?? 'ไม่ระบุงาน'}</div></div>
+            {data.canManageLeaveRecorders && <Button size="sm" variant="outline" disabled={busy} onClick={() => save({ removeLeaveRecorder: recorder.user_id })}>
+              <UserMinus size={13} /> ถอนสิทธิ์
+            </Button>}
+          </div>
+        ))}
+        {data.canManageLeaveRecorders ? (
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select className={inputCls} value={addRecorder} onChange={(e) => setAddRecorder(e.target.value)}>
+              <option value="">— เลือกเจ้าหน้าที่ —</option>
+              {staff.filter((person) => !data.leaveRecorders.some((recorder) => recorder.user_id === person.id)).map((person) => (
+                <option key={person.id} value={person.id}>{person.name} · {person.dept ?? 'ไม่ระบุงาน'}</option>
+              ))}
+            </select>
+            <Button disabled={!addRecorder || busy} onClick={() => { save({ addLeaveRecorder: addRecorder }); setAddRecorder('') }}>
+              <UserPlus size={15} /> มอบหมายผู้บันทึก
+            </Button>
+          </div>
+        ) : <p className="text-xs text-slate-500">รายการนี้จัดการได้เฉพาะ Admin</p>}
       </Card>
     </div>
   )

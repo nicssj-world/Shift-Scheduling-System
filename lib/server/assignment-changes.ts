@@ -3,7 +3,7 @@ import 'server-only'
 import { newOwnerChangeViolations, type OwnedAssignmentDraft } from '@/lib/scheduler/assignment-changes'
 import { getAssignments } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
-import { loadScheduleContext, toDrafts } from '@/lib/server/schedule-service'
+import { loadScheduleContext, toDrafts, toValidateContext } from '@/lib/server/schedule-service'
 
 export type AssignmentOwnerChange = {
   assignmentId: string
@@ -29,11 +29,7 @@ export async function assertOwnerChangesValid(changes: AssignmentOwnerChange[]) 
       id: String(rows[index].id),
     }))
     const changeMap = new Map(scheduleChanges.map((change) => [change.assignmentId, change.newUserId]))
-    const violations = newOwnerChangeViolations(
-      { days: ctx.days, slots: ctx.slots, unavailable: ctx.unavailable, config: ctx.config, carryIn: ctx.carryIn },
-      assignments,
-      changeMap,
-    )
+    const violations = newOwnerChangeViolations(toValidateContext(ctx), assignments, changeMap)
     if (violations.length > 0) {
       throw new HttpError(409, `ทำรายการไม่ได้: ${violations[0].message}`)
     }

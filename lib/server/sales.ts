@@ -16,9 +16,8 @@ type ApplySaleOptions = {
 /**
  * Transfer every assignment in the sale from seller to buyer — one-way,
  * unlike a swap. The seller's total shift count drops, the buyer's rises by
- * the number of items sold (lifetime fairness carry-in picks this up
- * automatically since it just counts current shift_assignments.user_id
- * rows).
+ * the number of items sold; the rolling fairness aggregation picks this up
+ * automatically from current shift_assignments.user_id rows.
  */
 export async function applySale(sale: Record<string, unknown>, options: ApplySaleOptions) {
   const admin = getAdminClient()

@@ -1,4 +1,4 @@
-import { validateAssignments, type ValidateContext } from '@/lib/scheduler/validate'
+import { validateAssignments, violationKey, type ValidateContext } from '@/lib/scheduler/validate'
 import type { AssignmentDraft, Violation } from '@/lib/scheduler/types'
 
 export type OwnedAssignmentDraft = AssignmentDraft & { id: string }
@@ -27,23 +27,15 @@ export function newOwnerChangeViolations(
     && Boolean(violation.userId)
     && changedUsers.has(violation.userId!)
   )
-  const signature = (violation: Violation) => [
-    violation.date,
-    violation.shiftTypeCode ?? '',
-    violation.userId ?? '',
-    violation.rule,
-    violation.message,
-  ].join('|')
-
   const beforeCounts = new Map<string, number>()
   for (const violation of validateAssignments(ctx, assignments).filter(relevant)) {
-    const key = signature(violation)
+    const key = violationKey(violation)
     beforeCounts.set(key, (beforeCounts.get(key) ?? 0) + 1)
   }
 
   const introduced: Violation[] = []
   for (const violation of validateAssignments(ctx, proposed).filter(relevant)) {
-    const key = signature(violation)
+    const key = violationKey(violation)
     const before = beforeCounts.get(key) ?? 0
     if (before > 0) beforeCounts.set(key, before - 1)
     else introduced.push(violation)

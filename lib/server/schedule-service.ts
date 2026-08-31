@@ -5,10 +5,10 @@ import { generateSchedule } from '@/lib/scheduler/engine'
 import { addRegularWork, addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
 import { consecutiveWorkDaysBefore, emptyStats, fairnessScore } from '@/lib/scheduler/fairness'
 import type { AssignmentDraft, SchedulerInput, Violation } from '@/lib/scheduler/types'
-import { validateAssignments } from '@/lib/scheduler/validate'
+import { validateAssignments, type ValidateContext } from '@/lib/scheduler/validate'
 import {
   buildCarryIn, buildDays, buildSlots, classifyDays, getAssignments, getHolidays, getJobs, getRequirements,
-  getSchedule, getSchedulerConfig, getShiftTypes, getTeam, getTeamMembers, getTeams, getUnavailableDates,
+  getSchedule, getSchedulerConfig, getShiftTypes, getTeam, getTeamMembers, getTeams,
   type MemberWithProfile,
 } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
@@ -25,6 +25,7 @@ export function assertMonth(month: string) {
 
 export type ScheduleContext = {
   schedule: Schedule
+  team: Awaited<ReturnType<typeof getTeam>>
   teamId: string
   month: string
   members: MemberWithProfile[]
@@ -43,20 +44,21 @@ export async function loadScheduleContext(scheduleId: string): Promise<ScheduleC
   const teamId = schedule.team_id
   const dates = datesOfMonth(month)
 
-  const [shiftTypes, requirements, jobs, holidays, members, config] = await Promise.all([
-    getShiftTypes(), getRequirements(teamId), getJobs(teamId),
+  const [team, shiftTypes, requirements, jobs, holidays, members, config] = await Promise.all([
+    getTeam(teamId), getShiftTypes(), getRequirements(teamId), getJobs(teamId),
     getHolidays(dates[0], dates[dates.length - 1]),
     getTeamMembers(teamId), getSchedulerConfig(),
   ])
   const days = classifyDays(dates, holidays)
 
-  const [unavailable, carryIn] = await Promise.all([
-    getUnavailableDates(members.map((m) => m.user_id), dates[0], dates[dates.length - 1]),
-    buildCarryIn(teamId, month, shiftTypes, jobs),
-  ])
+  // The leave/attendance register is informational only. Keep the scheduler's
+  // generic unavailable input available for pure-engine callers, but do not
+  // feed any leave/attendance register into it.
+  const unavailable: Record<string, string[]> = {}
+  const carryIn = await buildCarryIn(teamId, month, shiftTypes, jobs)
 
   return {
-    schedule: schedule as Schedule, teamId, month, members,
+    schedule: schedule as Schedule, team, teamId, month, members,
     slots: buildSlots(shiftTypes, requirements), days, unavailable, carryIn, config, jobs, shiftTypes,
   }
 }
@@ -72,16 +74,28 @@ export function toDrafts(ctx: ScheduleContext, rows: Record<string, unknown>[]):
   }))
 }
 
+export function toValidateContext(ctx: ScheduleContext): ValidateContext {
+  return {
+    days: ctx.days,
+    slots: ctx.slots,
+    shiftTypes: ctx.shiftTypes.map((type) => ({ id: type.id, code: type.code, isActive: type.is_active })),
+    members: ctx.members.map((member) => ({ userId: member.user_id, isActive: member.is_active })),
+    jobs: ctx.jobs.map((job) => ({ id: job.id, code: job.code, sortOrder: job.sort_order })),
+    usesJobs: ctx.team.uses_jobs,
+    exactCoverage: true,
+    unavailable: ctx.unavailable,
+    config: ctx.config,
+    carryIn: ctx.carryIn,
+  }
+}
+
 export async function validateSchedule(ctx: ScheduleContext): Promise<Violation[]> {
   const rows = await getAssignments(ctx.schedule.id)
-  return validateAssignments(
-    { days: ctx.days, slots: ctx.slots, unavailable: ctx.unavailable, config: ctx.config, carryIn: ctx.carryIn },
-    toDrafts(ctx, rows as Record<string, unknown>[]),
-  )
+  return validateAssignments(toValidateContext(ctx), toDrafts(ctx, rows as Record<string, unknown>[]))
 }
 
 export async function runGenerate(ctx: ScheduleContext, actorId: string) {
-  if (ctx.schedule.status === 'locked') throw new HttpError(409, 'ตารางถูกล็อคแล้ว')
+  if (ctx.schedule.status !== 'draft') throw new HttpError(409, 'สร้างตารางอัตโนมัติได้เฉพาะฉบับร่าง')
 
   const input: SchedulerInput = {
     days: ctx.days,
@@ -89,51 +103,65 @@ export async function runGenerate(ctx: ScheduleContext, actorId: string) {
     staff: ctx.members.map((m) => ({ userId: m.user_id, key: m.profile.ephis_id ?? m.user_id })),
     unavailable: ctx.unavailable,
     jobs: ctx.jobs.map((j) => ({ id: j.id, code: j.code, sortOrder: j.sort_order })),
+    usesJobs: ctx.team.uses_jobs,
     carryIn: ctx.carryIn,
     config: ctx.config,
   }
   const result = generateSchedule(input)
+  const jobConfigurationError = result.violations.find((violation) => violation.rule === 'job_coverage')
+  if (jobConfigurationError) throw new HttpError(409, jobConfigurationError.message)
 
   const admin = getAdminClient()
-  const { error: deleteError } = await admin.from('shift_assignments').delete().eq('schedule_id', ctx.schedule.id)
-  if (deleteError) throw new HttpError(500, deleteError.message)
-
   const rows = result.assignments.map((a) => ({
-    schedule_id: ctx.schedule.id,
     work_date: a.date,
     shift_type_id: a.shiftTypeId,
     user_id: a.userId,
     job_id: a.jobId,
     source: 'auto',
   }))
-  for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await admin.from('shift_assignments').insert(rows.slice(i, i + 500))
-    if (error) throw new HttpError(500, error.message)
+  const expectedVersion = Number((ctx.schedule as Schedule & { assignment_version?: number }).assignment_version ?? 0)
+  const { error } = await admin.rpc('shift_replace_schedule_assignments', {
+    p_schedule_id: ctx.schedule.id,
+    p_expected_version: expectedVersion,
+    p_rows: rows,
+    p_generated_by: actorId,
+    p_config: ctx.config as unknown as Record<string, unknown>,
+  })
+  if (error) {
+    if (error.code === '40001' || error.code === 'P0001') throw new HttpError(409, error.message)
+    throw new HttpError(500, error.message)
   }
-  await admin.from('shift_schedules').update({
-    generated_at: new Date().toISOString(),
-    generated_by: actorId,
-    config: ctx.config as unknown as Record<string, unknown>,
-  }).eq('id', ctx.schedule.id)
 
   return result
 }
 
 /** Candidate list for the manual cell editor, sorted by fairness. */
 export async function getCandidates(ctx: ScheduleContext, date: string, shiftTypeId: string) {
+  if (!ctx.days.some((day) => day.date === date)) throw new HttpError(400, 'วันที่อยู่นอกเดือนของตาราง')
   const slot = ctx.slots.find((s) => s.shiftTypeId === shiftTypeId)
   if (!slot) throw new HttpError(404, 'ไม่พบประเภทเวร')
   const rows = (await getAssignments(ctx.schedule.id)) as Record<string, unknown>[]
   const drafts = toDrafts(ctx, rows)
 
   const daySet = new Set(ctx.days.map((d) => d.date))
+  const knownDates = new Set([
+    ...daySet,
+    ...ctx.carryIn.regularWorkDates,
+    ...(ctx.carryIn.previousKnownDates ?? []),
+    ...(ctx.carryIn.futureRegularWorkDates ?? []),
+    ...(ctx.carryIn.futureKnownDates ?? []),
+    ...Object.values(ctx.carryIn.assignments).flat().map((assignment) => assignment.date),
+    ...Object.values(ctx.carryIn.futureAssignments ?? {}).flat().map((assignment) => assignment.date),
+  ])
   const monday = mondayOfWeek(date)
   const weekDates: string[] = []
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i)
-    if (daySet.has(d)) weekDates.push(d)
+    if (knownDates.has(d)) weekDates.push(d)
   }
   const dayClass = ctx.days.find((d) => d.date === date)?.dayClass ?? 'weekday'
+  const required = slot.requiredByDayClass[dayClass] ?? 0
+  const jobConfigurationError = ctx.team.uses_jobs && required > 0 && ctx.jobs.length !== required
   const dayClassByDate = new Map(ctx.days.map((day) => [day.date, day.dayClass]))
   const slotByCode = new Map(ctx.slots.map((s) => [s.code, s]))
 
@@ -147,7 +175,12 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
     for (const day of ctx.days) {
       if (day.dayClass === 'weekday' && !state.unavailable.has(day.date)) addRegularWork(state, day.date)
     }
-    for (const regularDate of ctx.carryIn.regularWorkDates) addRegularWork(state, regularDate)
+    for (const regularDate of ctx.carryIn.regularWorkDates) {
+      if (!state.unavailable.has(regularDate)) addRegularWork(state, regularDate)
+    }
+    for (const regularDate of ctx.carryIn.futureRegularWorkDates ?? []) {
+      if (!state.unavailable.has(regularDate)) addRegularWork(state, regularDate)
+    }
     const stats = emptyStats()
     stats.byType = { ...(ctx.carryIn.shiftTypeCounts[member.user_id] ?? {}) }
     stats.byJob = { ...(ctx.carryIn.jobCounts[member.user_id] ?? {}) }
@@ -157,6 +190,9 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       const s = slotByCode.get(a.code)
       if (!s) continue
       addToPerson(state, a.date, s)
+      // Keep an invalid stale row visible to overlap/max-shift checks, but an
+      // approved leave date still counts as a day off for weekly-rest logic.
+      if (state.unavailable.has(a.date)) state.workDates.delete(a.date)
       stats.total += 1
       stats.byType[a.code] = (stats.byType[a.code] ?? 0) + 1
       if (dayClassByDate.get(a.date) !== 'weekday') stats.weekendHoliday += 1
@@ -165,13 +201,24 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       const s = slotByCode.get(carry.code)
       if (s) {
         state.intervals.push(toInterval(carry.date, s))
-        state.workDates.add(carry.date)
+        if (!state.unavailable.has(carry.date)) state.workDates.add(carry.date)
+      }
+    }
+    for (const carry of ctx.carryIn.futureAssignments?.[member.user_id] ?? []) {
+      const s = slotByCode.get(carry.code)
+      if (s) {
+        state.intervals.push(toInterval(carry.date, s))
+        if (!state.unavailable.has(carry.date)) state.workDates.add(carry.date)
       }
     }
     const alreadyInSlot = drafts.some(
       (a) => a.userId === member.user_id && a.date === date && a.shiftTypeId === shiftTypeId,
     )
-    const check = alreadyInSlot
+    const check = required <= 0
+      ? ({ ok: false, rule: 'overstaffed', reason: 'เวรประเภทนี้ไม่ได้เปิดในวันดังกล่าว' } as const)
+      : jobConfigurationError
+        ? ({ ok: false, rule: 'job_coverage', reason: 'จำนวน Job ไม่ตรงจำนวนคนต่อเวร' } as const)
+        : alreadyInSlot
       ? ({ ok: false, rule: 'assigned', reason: 'อยู่ในเวรนี้แล้ว' } as const)
       : checkAssignment(state, date, slot, ctx.config, weekDates)
     return {

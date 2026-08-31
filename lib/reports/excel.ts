@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx'
 import { THAI_DAYS_SHORT, dayOfWeek, thaiMonthLabel, thaiTime } from '@/lib/dates'
+import { ATTENDANCE_REPORT_CATEGORIES, ATTENDANCE_REPORT_CATEGORY_TH, DEPARTMENTS } from '@/lib/types'
+import type { AttendanceReportRow } from '@/lib/attendance'
 import type { RosterExportData } from '@/lib/reports/roster-data'
 import type { LeaveReportRow, OtReportRow } from '@/lib/reports/pdf'
 
@@ -57,6 +59,36 @@ export function exportLeaveExcel(rows: LeaveReportRow[], fromMonth: string, toMo
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'สรุปวันลา')
   XLSX.writeFile(wb, `สรุปวันลา-${fromMonth}-ถึง-${toMonth}.xlsx`)
+}
+
+export function exportAttendanceExcel(rows: AttendanceReportRow[], from: string, to: string) {
+  const headers = ['ลำดับ', 'ชื่อ-สกุล', 'งาน', 'ตำแหน่ง', 'ประเภทการจ้าง', ...ATTENDANCE_REPORT_CATEGORIES.map((key) => ATTENDANCE_REPORT_CATEGORY_TH[key])]
+  const departmentName = (dept: string | null) => dept && (DEPARTMENTS as readonly string[]).includes(dept) ? dept : 'ไม่ระบุงาน'
+  const departments = [...new Set(rows.map((row) => departmentName(row.dept)))].sort((a, b) => {
+    const aIndex = DEPARTMENTS.indexOf(a as (typeof DEPARTMENTS)[number])
+    const bIndex = DEPARTMENTS.indexOf(b as (typeof DEPARTMENTS)[number])
+    if (aIndex === -1 && bIndex === -1) return a.localeCompare(b, 'th')
+    if (aIndex === -1) return 1
+    if (bIndex === -1) return -1
+    return aIndex - bIndex
+  })
+  const aoa: (string | number)[][] = [[`สรุปวันลาและการมาปฏิบัติงาน ${from} – ${to}`], headers]
+  let sequence = 1
+  for (const department of departments) {
+    aoa.push([department])
+    for (const row of rows.filter((item) => departmentName(item.dept) === department).sort((a, b) => a.name.localeCompare(b.name, 'th'))) {
+      aoa.push([
+        sequence++, row.name, department, row.positionTitle ?? '-', row.employmentType ?? '-',
+        ...ATTENDANCE_REPORT_CATEGORIES.map((key) => row[key]),
+      ])
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }]
+  ws['!cols'] = [{ wch: 8 }, { wch: 28 }, { wch: 34 }, { wch: 28 }, { wch: 18 }, ...ATTENDANCE_REPORT_CATEGORIES.map(() => ({ wch: 9 }))]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'สรุปทะเบียน')
+  XLSX.writeFile(wb, `สรุปวันลาและการมาปฏิบัติงาน-${from}-ถึง-${to}.xlsx`)
 }
 
 export function exportOtExcel(rows: OtReportRow[], typeCodes: string[], month: string) {

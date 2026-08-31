@@ -1,11 +1,12 @@
 import { requireActor } from '@/lib/server/auth'
 import { bangkokDateString, datesOfMonth } from '@/lib/dates'
+import { attendanceReportCategory, attendanceReportValue, ATTENDANCE_CODE_TH, ATTENDANCE_REPORT_CATEGORY_TH, type AttendanceCode } from '@/lib/types'
 import {
   buildDays, getAssignments, getRequirements, getShiftTypes, getTeamMembers, getTeams,
 } from '@/lib/server/data'
+import { getAttendanceDirectory } from '@/lib/server/attendance'
 import { respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { LEAVE_TYPE_TH, leaveDays, type LeaveType } from '@/lib/types'
 
 export async function GET(request: Request) {
   return respond(async () => {
@@ -15,7 +16,9 @@ export async function GET(request: Request) {
     const today = bangkokDateString()
     const admin = getAdminClient()
 
-    const [teams, shiftTypes, days] = await Promise.all([getTeams(), getShiftTypes(), buildDays(month)])
+    const [teams, shiftTypes, days, attendancePeople] = await Promise.all([
+      getTeams(), getShiftTypes(), buildDays(month), getAttendanceDirectory(),
+    ])
     const typeById = new Map(shiftTypes.map((t) => [t.id, t]))
     const dates = datesOfMonth(month)
 
@@ -40,7 +43,10 @@ export async function GET(request: Request) {
     // staff + today's duty
     const allMembers = teamData.flatMap((t) => t.members)
     const staffCount = new Set(allMembers.map((m) => m.user_id)).size
-    const nameByUser = new Map(allMembers.map((m) => [m.user_id, m.displayName]))
+    const nameByUser = new Map([
+      ...attendancePeople.map((person) => [person.id, person.name] as const),
+      ...allMembers.map((m) => [m.user_id, m.displayName] as const),
+    ])
 
     const todayByType: Record<string, { code: string; name: string; color: string; people: string[] }> = {}
     const shiftsByType: Record<string, number> = {}
@@ -68,20 +74,22 @@ export async function GET(request: Request) {
       }
     }
 
-    // leaves
-    const { data: monthLeaves } = await admin
-      .from('shift_leaves').select('user_id,leave_type,start_date,end_date,day_part,status')
-      .eq('status', 'approved')
-      .lte('start_date', dates[dates.length - 1])
-      .gte('end_date', dates[0])
+    // The register is informational only; it never feeds scheduler coverage.
+    const { data: monthAttendance, error: attendanceError } = await admin
+      .from('shift_attendance_records').select('user_id,record_date,code')
+      .is('deleted_at', null)
+      .gte('record_date', dates[0])
+      .lte('record_date', dates[dates.length - 1])
+    if (attendanceError) throw new Error(attendanceError.message)
     const leavesByType: Record<string, number> = {}
     const onLeaveToday: { name: string; type: string }[] = []
-    for (const leave of monthLeaves ?? []) {
-      const type = LEAVE_TYPE_TH[String(leave.leave_type) as LeaveType] ?? String(leave.leave_type)
-      leavesByType[type] = (leavesByType[type] ?? 0) +
-        leaveDays({ start_date: String(leave.start_date), end_date: String(leave.end_date), day_part: String(leave.day_part) as 'full' })
-      if (String(leave.start_date) <= today && today <= String(leave.end_date)) {
-        onLeaveToday.push({ name: nameByUser.get(String(leave.user_id)) ?? '', type })
+    for (const row of monthAttendance ?? []) {
+      const code = String(row.code) as AttendanceCode
+      const category = attendanceReportCategory(code)
+      const categoryLabel = ATTENDANCE_REPORT_CATEGORY_TH[category]
+      leavesByType[categoryLabel] = (leavesByType[categoryLabel] ?? 0) + attendanceReportValue(code)
+      if (String(row.record_date) === today) {
+        onLeaveToday.push({ name: nameByUser.get(String(row.user_id)) ?? '', type: ATTENDANCE_CODE_TH[code] ?? code })
       }
     }
 

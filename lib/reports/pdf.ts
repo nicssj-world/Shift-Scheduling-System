@@ -1,7 +1,9 @@
 import { jsPDF } from 'jspdf'
-import autoTable, { type CellHookData } from 'jspdf-autotable'
+import autoTable, { type CellHookData, type RowInput } from 'jspdf-autotable'
 import { sarabunBase64 } from '@/lib/fonts/sarabun-base64'
-import { THAI_DAYS_SHORT, dayOfWeek, thaiMonthLabel, thaiTime, toBE } from '@/lib/dates'
+import { THAI_DAYS_SHORT, THAI_MONTHS_SHORT, dayOfWeek, thaiMonthLabel, thaiTime, toBE } from '@/lib/dates'
+import { DEPARTMENTS } from '@/lib/types'
+import type { AttendanceReportRow } from '@/lib/attendance'
 import type { RosterExportData } from '@/lib/reports/roster-data'
 
 function createThaiDoc(orientation: 'portrait' | 'landscape' = 'landscape') {
@@ -74,6 +76,104 @@ export function exportRosterPdf(data: RosterExportData) {
 }
 
 export type LeaveReportRow = { name: string; dept: string | null; month: string; typeTh: string; days: number }
+
+function thaiReportDate(date: string) {
+  const [year, month, day] = date.split('-').map(Number)
+  return `${day} ${THAI_MONTHS_SHORT[month - 1]} ${toBE(year)}`
+}
+
+function reportDepartment(dept: string | null) {
+  return dept && (DEPARTMENTS as readonly string[]).includes(dept) ? dept : 'ไม่ระบุงาน'
+}
+
+function reportNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1)
+}
+
+/** A4 landscape attendance register summary matching the supplied workbook. */
+export function buildAttendancePdf(rows: AttendanceReportRow[], from: string, to: string) {
+  const doc = createThaiDoc('landscape')
+  doc.setFontSize(15)
+  doc.text(`สรุปวันลาและการมาปฏิบัติงาน ${thaiReportDate(from)} – ${thaiReportDate(to)}`, 148, 11, { align: 'center' })
+  doc.setFontSize(9)
+  doc.text('กลุ่มงานเทคนิคการแพทย์ โรงพยาบาลชลบุรี', 148, 17, { align: 'center' })
+
+  const orderedDepartments = [...new Set(rows.map((row) => reportDepartment(row.dept)))].sort((a, b) => {
+    const aIndex = DEPARTMENTS.indexOf(a as (typeof DEPARTMENTS)[number])
+    const bIndex = DEPARTMENTS.indexOf(b as (typeof DEPARTMENTS)[number])
+    if (aIndex === -1 && bIndex === -1) return a.localeCompare(b, 'th')
+    if (aIndex === -1) return 1
+    if (bIndex === -1) return -1
+    return aIndex - bIndex
+  })
+  const byDepartment = new Map(orderedDepartments.map((dept) => [dept, rows.filter((row) => reportDepartment(row.dept) === dept).sort((a, b) => a.name.localeCompare(b.name, 'th'))]))
+  const body: RowInput[] = []
+  const departmentRows = new Set<number>()
+  let sequence = 1
+  for (const department of orderedDepartments) {
+    departmentRows.add(body.length)
+    body.push([{ content: department, colSpan: 11 }])
+    for (const row of byDepartment.get(department) ?? []) {
+      body.push([
+        String(sequence++), row.name, row.positionTitle ?? '-', row.employmentType ?? '-',
+        reportNumber(row.vacation), reportNumber(row.sick), reportNumber(row.personal),
+        reportNumber(row.absent), reportNumber(row.late), reportNumber(row.early), reportNumber(row.maternity),
+      ])
+    }
+  }
+
+  autoTable(doc, {
+    startY: 21,
+    head: [['ลำดับ', 'ชื่อ-สกุล', 'ตำแหน่ง', 'ประเภทการจ้าง', 'พัก', 'ป่วย', 'กิจ', 'ขาด', 'สาย', 'ก่อน', 'คลอด']],
+    body,
+    showHead: 'everyPage',
+    styles: {
+      font: 'Sarabun', fontSize: 8.2, cellPadding: 1.1, valign: 'middle',
+      lineColor: [65, 85, 100], lineWidth: 0.15, textColor: [20, 35, 48],
+    },
+    // Only the regular Sarabun face is embedded in this app. Keeping the
+    // table on that face prevents jsPDF from falling back to a Latin font for
+    // Thai glyphs when a synthetic bold face is requested.
+    headStyles: { fillColor: [66, 135, 185], textColor: [255, 255, 255], fontStyle: 'normal', halign: 'center' },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 39 },
+      2: { cellWidth: 36 },
+      3: { cellWidth: 28 },
+      4: { cellWidth: 13, halign: 'center' },
+      5: { cellWidth: 13, halign: 'center' },
+      6: { cellWidth: 13, halign: 'center' },
+      7: { cellWidth: 13, halign: 'center' },
+      8: { cellWidth: 13, halign: 'center' },
+      9: { cellWidth: 13, halign: 'center' },
+      10: { cellWidth: 13, halign: 'center' },
+    },
+    didParseCell(cell: CellHookData) {
+      if (cell.section === 'head' && cell.column.index >= 4) {
+        cell.cell.styles.fillColor = [72, 157, 125]
+      }
+      if (cell.section === 'body' && departmentRows.has(cell.row.index)) {
+        cell.cell.styles.fillColor = [255, 244, 166]
+        cell.cell.styles.fontStyle = 'normal'
+        cell.cell.styles.textColor = [80, 62, 0]
+        cell.cell.styles.halign = 'left'
+      }
+    },
+    didDrawPage(data) {
+      doc.setFontSize(7)
+      doc.setTextColor(90, 105, 115)
+      doc.text(`หน้า ${data.pageNumber}`, 291, 202, { align: 'right' })
+    },
+    margin: { left: 6, right: 6, bottom: 9 },
+  })
+
+  return doc
+}
+
+export function exportAttendancePdf(rows: AttendanceReportRow[], from: string, to: string) {
+  const doc = buildAttendancePdf(rows, from, to)
+  doc.save(`สรุปวันลาและการมาปฏิบัติงาน-${from}-ถึง-${to}.pdf`)
+}
 
 export function exportLeavePdf(rows: LeaveReportRow[], fromMonth: string, toMonth: string) {
   const doc = createThaiDoc('portrait')

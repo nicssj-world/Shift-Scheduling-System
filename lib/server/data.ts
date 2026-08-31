@@ -1,9 +1,10 @@
 import 'server-only'
 
-import { datesOfMonth, isWeekend, previousMonth, timeToMinutes } from '@/lib/dates'
+import { datesOfMonth, isWeekend, nextMonth, previousMonth } from '@/lib/dates'
 import { buildDisplayNames } from '@/lib/names'
 import { HttpError } from '@/lib/server/errors'
 import { DEFAULT_CONFIG, type CarryIn, type DayInfo, type SchedulerConfig, type SlotDef } from '@/lib/scheduler/types'
+import { normalizeShiftTimes } from '@/lib/scheduler/shift-time'
 import { getAdminClient } from '@/lib/supabase/admin'
 import {
   normalizeRole,
@@ -17,7 +18,7 @@ const admin = () => getAdminClient()
 export async function getStaffDirectory(): Promise<StaffProfile[]> {
   const { data, error } = await admin()
     .from('profiles')
-    .select('id,ephis_id,name,role,dept,phone,status,deleted_at')
+    .select('id,ephis_id,name,role,dept,phone,position_title,employment_type,status,deleted_at')
     .order('name')
   if (error) throw new HttpError(500, error.message)
   return (data ?? [])
@@ -32,6 +33,8 @@ export async function getStaffDirectory(): Promise<StaffProfile[]> {
       role: normalizeRole(p.role ? String(p.role) : null),
       dept: p.dept ? String(p.dept) : null,
       phone: p.phone ? String(p.phone) : null,
+      position_title: p.position_title ? String(p.position_title) : null,
+      employment_type: p.employment_type ? String(p.employment_type) : null,
     }))
 }
 
@@ -71,7 +74,21 @@ export async function getTeam(teamId: string): Promise<Team> {
 export async function getShiftTypes(): Promise<ShiftType[]> {
   const { data, error } = await admin().from('shift_shift_types').select('*').order('sort_order')
   if (error) throw new HttpError(500, error.message)
-  return ((data ?? []) as unknown as ShiftType[]).map((t) => ({ ...t, hours: Number(t.hours) }))
+  return ((data ?? []) as unknown as ShiftType[]).map((t) => {
+    let normalized: ReturnType<typeof normalizeShiftTimes>
+    try {
+      normalized = normalizeShiftTimes(t.start_time, t.end_time, Number(t.hours))
+    } catch (reason) {
+      throw new HttpError(400, `ประเภทเวร ${t.code}: ${reason instanceof Error ? reason.message : 'เวลาไม่ถูกต้อง'}`)
+    }
+    return {
+      ...t,
+      hours: normalized.hours,
+      // Keep existing installations usable before the flag migration is run;
+      // once migrated, the persisted value is authoritative.
+      triggers_rest_after_night: t.triggers_rest_after_night ?? String(t.code).toUpperCase() === 'N',
+    }
+  })
 }
 
 export async function getRequirements(teamId?: string): Promise<Requirement[]> {
@@ -91,7 +108,7 @@ export async function getJobs(teamId: string): Promise<Job[]> {
 
 export async function getHolidays(fromDate: string, toDate: string): Promise<Holiday[]> {
   const { data, error } = await admin()
-    .from('shift_holidays').select('holiday_date,name_th,kind')
+    .from('shift_holidays').select('holiday_date,name_th,kind,source')
     .gte('holiday_date', fromDate).lte('holiday_date', toDate)
     .order('holiday_date')
   if (error) throw new HttpError(500, error.message)
@@ -114,7 +131,7 @@ export async function getTeamMembersForTeams(teamIds: string[], activeOnly = tru
 
   const ids = [...new Set(members.map((m) => m.user_id))]
   const { data: profiles, error: profileError } = await admin()
-    .from('profiles').select('id,ephis_id,name,role,dept,phone').in('id', ids)
+    .from('profiles').select('id,ephis_id,name,role,dept,phone,position_title,employment_type').in('id', ids)
   if (profileError) throw new HttpError(500, profileError.message)
   const profileById = new Map((profiles ?? []).map((p) => [String(p.id), p]))
 
@@ -143,6 +160,8 @@ export async function getTeamMembersForTeams(teamIds: string[], activeOnly = tru
           role: normalizeRole(p.role ? String(p.role) : null),
           dept: p.dept ? String(p.dept) : null,
           phone: p.phone ? String(p.phone) : null,
+          position_title: p.position_title ? String(p.position_title) : null,
+          employment_type: p.employment_type ? String(p.employment_type) : null,
         },
         displayName: displayNamesByTeam.get(m.team_id)?.get(m.user_id) ?? String(p.name ?? ''),
       }
@@ -191,133 +210,225 @@ export function buildSlots(shiftTypes: ShiftType[], requirements: Requirement[])
       for (const r of requirements) {
         if (r.shift_type_id === t.id) byClass[r.day_class] = r.required_count
       }
-      const startMin = timeToMinutes(t.start_time)
-      let endMin = timeToMinutes(t.end_time)
-      if (endMin === 0) endMin = 1440
+      let normalized: ReturnType<typeof normalizeShiftTimes>
+      try {
+        normalized = normalizeShiftTimes(t.start_time, t.end_time, Number(t.hours))
+      } catch (error) {
+        throw new HttpError(400, `ประเภทเวร ${t.code}: ${error instanceof Error ? error.message : 'เวลาไม่ถูกต้อง'}`)
+      }
       return {
         shiftTypeId: t.id,
         code: t.code,
-        startMin,
-        endMin,
-        hours: Number(t.hours),
+        startMin: normalized.startMin,
+        endMin: normalized.endMin,
+        // Duration used by scheduling and reports must come from the actual
+        // interval, not a separately editable value that may be stale.
+        hours: normalized.hours,
+        triggersRestAfterNight: Boolean(t.triggers_rest_after_night ?? String(t.code).toUpperCase() === 'N'),
         requiredByDayClass: byClass,
       }
     })
 }
 
-/** Approved leave dates per user overlapping [from, to]. */
-export async function getUnavailableDates(userIds: string[], from: string, to: string) {
-  const result: Record<string, string[]> = {}
-  if (userIds.length === 0) return result
-  const { data, error } = await admin()
-    .from('shift_leaves')
-    .select('user_id,start_date,end_date,status')
-    .in('user_id', userIds)
-    .eq('status', 'approved')
-    .lte('start_date', to)
-    .gte('end_date', from)
-  if (error) throw new HttpError(500, error.message)
-  for (const leave of data ?? []) {
-    const userId = String(leave.user_id)
-    const dates = result[userId] ?? []
-    let cursor = String(leave.start_date) < from ? from : String(leave.start_date)
-    const end = String(leave.end_date) > to ? to : String(leave.end_date)
-    while (cursor <= end) {
-      dates.push(cursor)
-      const d = new Date(`${cursor}T00:00:00Z`)
-      d.setUTCDate(d.getUTCDate() + 1)
-      cursor = d.toISOString().slice(0, 10)
-    }
-    result[userId] = dates
-  }
-  return result
-}
-
 /**
  * Carry-in for fairness across months:
- * - totalCounts: lifetime shift count per person across EVERY prior schedule
- *   for this team (any month) — so whoever got the "extra" shift one month
- *   is deprioritized afterward instead of staying stuck with it forever;
- *   the odd shift rotates through everyone as history accumulates.
- * - shiftTypeCounts / jobCounts / weekendHolidayCounts / pairCounts:
- *   previous-month-only data used to smooth rotations across month edges.
- * - assignments / regularWorkDates: previous-month boundary work used for
- *   rest and the hard 16-hour continuous-work constraint.
+ * - totalCounts / shiftTypeCounts / jobCounts / weekendHolidayCounts /
+ *   pairCounts: completed schedules in the preceding six calendar months.
+ * - assignments / regularWorkDates and optional future* fields: six-day
+ *   previous/next-month boundary context used for rest, 16-hour continuity,
+ *   and cross-month weekly-day-off checks.
  */
+export const FAIRNESS_WINDOW_MONTHS = 6
+
 export async function buildCarryIn(teamId: string, month: string, shiftTypes: ShiftType[], jobs: Job[]): Promise<CarryIn> {
   const prevMonth = previousMonth(month)
+  const followingMonth = nextMonth(month)
   const prevDates = datesOfMonth(prevMonth)
-  const boundaryDates = prevDates.slice(-3)
+  const boundaryDates = prevDates.slice(-6)
+  let fromMonth = prevMonth
+  for (let i = 1; i < FAIRNESS_WINDOW_MONTHS; i++) fromMonth = previousMonth(fromMonth)
+  const fromDates = datesOfMonth(fromMonth)
+  const followingDates = datesOfMonth(followingMonth)
   const typeCodeById = new Map(shiftTypes.map((t) => [t.id, t.code]))
   const jobCodeById = new Map(jobs.map((j) => [j.id, j.code]))
-
-  // Aggregated in Postgres (see shift_lifetime_totals in
-  // 202607080003_shift_lifetime_totals_fn.sql) so this stays a flat, cheap
-  // query — ~one row per team member — no matter how many months of history
-  // pile up, instead of fetching every historical assignment row and summing
-  // them in JS.
-  const [{ data: totalsRows, error: totalsError }, { data: prevSchedule }, prevHolidays] = await Promise.all([
-    admin().rpc('shift_lifetime_totals', { p_team_id: teamId, p_exclude_month: `${month}-01` }),
-    admin().from('shift_schedules').select('id').eq('team_id', teamId).eq('month', `${prevMonth}-01`).maybeSingle(),
-    getHolidays(prevDates[0], prevDates[prevDates.length - 1]),
-  ])
-  // Degrade to "no lifetime history" instead of breaking generate entirely if
-  // the migration adding this function hasn't been run yet.
-  if (totalsError) console.error('shift_lifetime_totals RPC failed (migration applied?):', totalsError.message)
-
-  const totalCounts: Record<string, number> = {}
-  for (const row of (totalsRows ?? []) as { user_id: string; total: number }[]) {
-    totalCounts[String(row.user_id)] = Number(row.total)
-  }
-
-  if (!prevSchedule) return {
+  const empty = (totalCounts: Record<string, number> = {}): CarryIn => ({
     assignments: {}, shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
     regularWorkDates: [], totalCounts,
+  })
+
+  // Only completed rosters in the six calendar months immediately preceding
+  // the target month influence fairness. In particular, never let a future
+  // roster or an abandoned Draft bias a schedule being generated now.
+  const [{ data: schedules, error: schedulesError }, { data: fairnessRows, error: fairnessError }, holidays, { data: followingSchedule, error: followingScheduleError }, followingHolidays] = await Promise.all([
+    admin().from('shift_schedules').select('id,month,status')
+      .eq('team_id', teamId)
+      .gte('month', `${fromMonth}-01`)
+      .lte('month', `${prevMonth}-01`)
+      .in('status', ['published', 'locked']),
+    admin().rpc('shift_rolling_fairness', {
+      p_team_id: teamId,
+      p_from_month: `${fromMonth}-01`,
+      p_to_month: `${month}-01`,
+    }),
+    getHolidays(fromDates[0], prevDates[prevDates.length - 1]),
+    admin().from('shift_schedules').select('id,month,status')
+      .eq('team_id', teamId)
+      .eq('month', `${followingMonth}-01`)
+      .in('status', ['published', 'locked'])
+      .maybeSingle(),
+    getHolidays(followingDates[0], followingDates[5]),
+  ])
+  if (schedulesError) throw new HttpError(500, schedulesError.message)
+  if (followingScheduleError) throw new HttpError(500, followingScheduleError.message)
+  if (fairnessError) console.error('shift_rolling_fairness RPC failed (migration applied?):', fairnessError.message)
+
+  const totalCounts: Record<string, number> = {}
+  for (const row of (fairnessRows ?? []) as { user_id: string; total: number }[]) {
+    totalCounts[String(row.user_id)] = Number(row.total)
+  }
+  const completed = (schedules ?? []).map((schedule) => ({ id: String(schedule.id), month: String(schedule.month).slice(0, 7) }))
+  const previousScheduleIds = completed.map((schedule) => schedule.id)
+  let rows: Record<string, unknown>[] = []
+  // The normal path gets all fairness dimensions from the bounded SQL
+  // aggregation above. Only an installation that has not run the migration
+  // falls back to reading the bounded six-month rows temporarily.
+  if (fairnessError && previousScheduleIds.length > 0) {
+    const { data, error } = await admin().from('shift_assignments')
+      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+      .in('schedule_id', previousScheduleIds)
+    if (error) throw new HttpError(500, error.message)
+    rows = (data ?? []) as Record<string, unknown>[]
   }
 
-  const rows = await getAssignments(String(prevSchedule.id))
-  const holidaySet = new Set(prevHolidays.map((holiday) => holiday.holiday_date))
-  const boundary = new Set(boundaryDates)
-  const regularWorkDates = boundaryDates.filter((date) => !isWeekend(date) && !holidaySet.has(date))
-
-  const carry: CarryIn = {
-    assignments: {}, shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
-    regularWorkDates, totalCounts,
+  // Compatibility fallback for environments where the rolling aggregation
+  // migration has not been run yet. The window is bounded to six months, so a
+  // temporary application-side count is safe while the migration is applied.
+  if (fairnessError || totalCounts.size === 0) {
+    for (const row of rows ?? []) {
+      const userId = String(row.user_id)
+      totalCounts[userId] = (totalCounts[userId] ?? 0) + 1
+    }
   }
-  const groups = new Map<string, string[]>()
-  for (const row of rows) {
-    const userId = String(row.user_id)
+
+  const holidaySet = new Set((holidays ?? []).map((holiday) => holiday.holiday_date))
+  const previousScheduleId = completed.find((schedule) => schedule.month === prevMonth)?.id
+  const regularWorkDates = previousScheduleId
+    ? boundaryDates.filter((date) => !isWeekend(date) && !holidaySet.has(date))
+    : []
+  const futureBoundaryDates = followingDates.slice(0, 6)
+  const futureHolidaySet = new Set((followingHolidays ?? []).map((holiday) => holiday.holiday_date))
+  const futureRegularWorkDates = followingSchedule
+    ? futureBoundaryDates.filter((date) => !isWeekend(date) && !futureHolidaySet.has(date))
+    : []
+  const carry = empty(totalCounts)
+  carry.regularWorkDates = regularWorkDates
+  carry.previousKnownDates = previousScheduleId ? boundaryDates : []
+  carry.futureRegularWorkDates = futureRegularWorkDates
+  carry.futureKnownDates = followingSchedule ? futureBoundaryDates : []
+
+  let boundaryRows: Record<string, unknown>[] = []
+  if (previousScheduleId) {
+    const { data, error } = await admin().from('shift_assignments')
+      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+      .eq('schedule_id', previousScheduleId)
+      .gte('work_date', boundaryDates[0])
+      .lte('work_date', boundaryDates[boundaryDates.length - 1])
+    if (error) throw new HttpError(500, error.message)
+    boundaryRows = (data ?? []) as Record<string, unknown>[]
+  }
+
+  let futureRows: Record<string, unknown>[] = []
+  if (followingSchedule) {
+    const { data, error } = await admin().from('shift_assignments')
+      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+      .eq('schedule_id', String(followingSchedule.id))
+      .gte('work_date', futureBoundaryDates[0])
+      .lte('work_date', futureBoundaryDates[futureBoundaryDates.length - 1])
+    if (error) throw new HttpError(500, error.message)
+    futureRows = (data ?? []) as Record<string, unknown>[]
+  }
+  // Fairness dimensions are already grouped by Postgres in the normal path.
+  // Keep the JS reduction solely as a bounded compatibility fallback when the
+  // new RPC has not been deployed yet.
+  if (fairnessError) {
+    const groups = new Map<string, string[]>()
+    for (const row of rows) {
+      const userId = String(row.user_id)
+      const code = typeCodeById.get(String(row.shift_type_id))
+      if (!code) continue
+      const counts = (carry.shiftTypeCounts[userId] ??= {})
+      counts[code] = (counts[code] ?? 0) + 1
+      const workDate = String(row.work_date)
+      if (isWeekend(workDate) || holidaySet.has(workDate)) {
+        carry.weekendHolidayCounts[userId] = (carry.weekendHolidayCounts[userId] ?? 0) + 1
+      }
+      const groupKey = `${String(row.schedule_id)}|${workDate}|${String(row.shift_type_id)}`
+      groups.set(groupKey, [...(groups.get(groupKey) ?? []), userId])
+      if (row.job_id) {
+        const jobCode = jobCodeById.get(String(row.job_id))
+        if (jobCode) {
+          const jobCounts = (carry.jobCounts[userId] ??= {})
+          jobCounts[jobCode] = (jobCounts[jobCode] ?? 0) + 1
+        }
+      }
+    }
+    for (const group of groups.values()) {
+      const userIds = [...new Set(group)].sort()
+      for (let i = 0; i < userIds.length; i++) {
+        for (let j = i + 1; j < userIds.length; j++) {
+          const [a, b] = [userIds[i], userIds[j]]
+          ;(carry.pairCounts[a] ??= {})[b] = (carry.pairCounts[a][b] ?? 0) + 1
+          ;(carry.pairCounts[b] ??= {})[a] = (carry.pairCounts[b][a] ?? 0) + 1
+        }
+      }
+    }
+  } else {
+    for (const row of (fairnessRows ?? []) as FairnessRow[]) {
+      const userId = String(row.user_id)
+      carry.shiftTypeCounts[userId] = parseCountMap(row.shift_type_counts)
+      carry.jobCounts[userId] = parseCountMap(row.job_counts)
+      carry.weekendHolidayCounts[userId] = Number(row.weekend_holiday ?? 0)
+      carry.pairCounts[userId] = parseCountMap(row.pair_counts)
+    }
+  }
+
+  // Boundary intervals are used for hard rest/16-hour checks only and come
+  // from the immediately preceding completed roster.
+  for (const row of boundaryRows) {
     const code = typeCodeById.get(String(row.shift_type_id))
     if (!code) continue
-    const counts = (carry.shiftTypeCounts[userId] ??= {})
-    counts[code] = (counts[code] ?? 0) + 1
-    const workDate = String(row.work_date)
-    if (isWeekend(workDate) || holidaySet.has(workDate)) {
-      carry.weekendHolidayCounts[userId] = (carry.weekendHolidayCounts[userId] ?? 0) + 1
-    }
-    const groupKey = `${workDate}|${String(row.shift_type_id)}`
-    groups.set(groupKey, [...(groups.get(groupKey) ?? []), userId])
-    if (row.job_id) {
-      const jobCode = jobCodeById.get(String(row.job_id))
-      if (jobCode) {
-        const jobCounts = (carry.jobCounts[userId] ??= {})
-        jobCounts[jobCode] = (jobCounts[jobCode] ?? 0) + 1
-      }
-    }
-    if (boundary.has(workDate)) {
-      const list = (carry.assignments[userId] ??= [])
-      list.push({ date: workDate, code })
-    }
+    const userId = String(row.user_id)
+    const list = (carry.assignments[userId] ??= [])
+    list.push({ date: String(row.work_date), code })
   }
-  for (const group of groups.values()) {
-    const userIds = [...new Set(group)].sort()
-    for (let i = 0; i < userIds.length; i++) {
-      for (let j = i + 1; j < userIds.length; j++) {
-        const [a, b] = [userIds[i], userIds[j]]
-        ;(carry.pairCounts[a] ??= {})[b] = (carry.pairCounts[a][b] ?? 0) + 1
-        ;(carry.pairCounts[b] ??= {})[a] = (carry.pairCounts[b][a] ?? 0) + 1
-      }
+  if (futureRows.length > 0) {
+    for (const row of futureRows) {
+      const code = typeCodeById.get(String(row.shift_type_id))
+      if (!code) continue
+      const userId = String(row.user_id)
+      const list = (carry.futureAssignments ??= {})[userId] ?? []
+      list.push({ date: String(row.work_date), code })
+      carry.futureAssignments[userId] = list
     }
   }
   return carry
+}
+
+type FairnessRow = {
+  user_id: string
+  total: number
+  shift_type_counts: unknown
+  job_counts: unknown
+  weekend_holiday: number
+  pair_counts: unknown
+}
+
+function parseCountMap(value: unknown): Record<string, number> {
+  let parsed: unknown = value
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed) } catch { return {} }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  return Object.fromEntries(Object.entries(parsed as Record<string, unknown>)
+    .map(([key, count]) => [key, Number(count)]).filter(([, count]) => Number.isFinite(count)))
 }

@@ -15,14 +15,17 @@ export function makeSlots(required: number): SlotDef[] {
   return [
     {
       shiftTypeId: 'st-m', code: 'M', startMin: 480, endMin: 960, hours: 8,
+      triggersRestAfterNight: false,
       requiredByDayClass: { weekday: 0, weekend: required, holiday: required },
     },
     {
       shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      triggersRestAfterNight: false,
       requiredByDayClass: { weekday: required, weekend: required, holiday: required },
     },
     {
       shiftTypeId: 'st-n', code: 'N', startMin: 0, endMin: 480, hours: 8,
+      triggersRestAfterNight: true,
       requiredByDayClass: { weekday: required, weekend: required, holiday: required },
     },
   ]

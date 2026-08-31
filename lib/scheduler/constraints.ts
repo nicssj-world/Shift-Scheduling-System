@@ -6,6 +6,7 @@ export type Interval = {
   /** absolute minutes since 1970-01-01 00:00 UTC */
   startAbs: number
   endAbs: number
+  /** True when this shift triggers the configurable post-night OT rest rule. */
   isNight: boolean
   /** Implicit Mon–Fri 08:00–16:00 regular work. It counts toward continuous
    * hours, but is not an OT shift and is not controlled by the OT-double
@@ -17,14 +18,21 @@ export function epochDay(date: string) {
   return Math.round(Date.parse(`${date}T00:00:00Z`) / 86400000)
 }
 
-export function toInterval(date: string, slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin'>): Interval {
+export function toInterval(
+  date: string,
+  slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin' | 'triggersRestAfterNight'>,
+): Interval {
   const base = epochDay(date) * 1440
   return {
     date,
     code: slot.code,
     startAbs: base + slot.startMin,
     endAbs: base + slot.endMin,
-    isNight: slot.startMin === 0,
+    // The flag is authoritative. Production slots always carry it from
+    // shift_shift_types.triggers_rest_after_night; an omitted value in a pure
+    // fixture is deliberately treated as non-night rather than inferred from
+    // the clock time.
+    isNight: slot.triggersRestAfterNight === true,
   }
 }
 
@@ -54,7 +62,7 @@ const MAX_CONTIGUOUS_MIN = 16 * 60
 export function checkAssignment(
   person: PersonState,
   date: string,
-  slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin'>,
+  slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin' | 'triggersRestAfterNight'>,
   config: SchedulerConfig,
   weekDates: string[],
 ): CheckResult {
@@ -70,17 +78,20 @@ export function checkAssignment(
       return { ok: false, rule: 'overlap', reason: `ซ้อนกับ${iv.code}วันเดียวกัน` }
     }
     // rest after a night shift ends
-    if (!iv.isRegularWork && iv.isNight && next.startAbs >= iv.endAbs) {
+    // The configured post-night rest window applies only before another OT
+    // shift. Implicit 08:00–16:00 regular work is intentionally exempt; it
+    // still participates in overlap/continuous-hours checks below.
+    if (!iv.isRegularWork && iv.isNight && !next.isRegularWork && next.startAbs >= iv.endAbs) {
       const gap = next.startAbs - iv.endAbs
       if (gap < config.minRestHoursAfterNight * 60) {
-        return { ok: false, rule: 'rest_after_night', reason: `พักหลังเวรดึกน้อยกว่า ${config.minRestHoursAfterNight} ชม.` }
+        return { ok: false, rule: 'rest_after_night', reason: `พักก่อน OT ถัดไปหลังเวรดึกน้อยกว่า ${config.minRestHoursAfterNight} ชม.` }
       }
     }
     // the new shift is a night shift: person must still get rest before a later shift
     if (!iv.isRegularWork && next.isNight && iv.startAbs >= next.endAbs) {
       const gap = iv.startAbs - next.endAbs
       if (gap < config.minRestHoursAfterNight * 60) {
-        return { ok: false, rule: 'rest_after_night', reason: `เวรถัดไปเริ่มเร็วเกินหลังเวรดึก` }
+        return { ok: false, rule: 'rest_after_night', reason: 'OT ถัดไปเริ่มเร็วเกินหลังเวรดึก' }
       }
     }
   }
@@ -115,8 +126,9 @@ export function checkAssignment(
     return { ok: false, rule: 'max_shifts', reason: `ครบ ${config.maxShiftsPerMonth} เวร/เดือนแล้ว` }
   }
 
-  // Weekly day off is only enforceable for weeks fully inside the month —
-  // partial edge weeks would otherwise reject everyone.
+  // Weekly day off is enforceable whenever the complete Mon–Sun boundary is
+  // known. Unknown future edge days are left for the validator's pending
+  // warning until the following roster exists.
   if (config.requireWeeklyDayOff && weekDates.length >= 7 && !person.workDates.has(date)) {
     // must keep at least one assignment-free day in this Mon–Sun week
     const freeAfter = weekDates.filter((d) => d !== date && !person.workDates.has(d)).length
@@ -128,7 +140,11 @@ export function checkAssignment(
   return { ok: true }
 }
 
-export function addToPerson(person: PersonState, date: string, slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin'>) {
+export function addToPerson(
+  person: PersonState,
+  date: string,
+  slot: Pick<SlotDef, 'code' | 'startMin' | 'endMin' | 'triggersRestAfterNight'>,
+) {
   person.intervals.push(toInterval(date, slot))
   person.workDates.add(date)
   person.monthCount += 1

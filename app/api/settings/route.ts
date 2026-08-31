@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { requireActor, requireAdmin } from '@/lib/server/auth'
+import { getLeaveRecorders } from '@/lib/server/attendance'
 import { getSchedulerConfig, getSwapSettings } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
@@ -7,8 +8,8 @@ import { getAdminClient } from '@/lib/supabase/admin'
 
 export async function GET() {
   return respond(async () => {
-    await requireActor()
-    const [scheduler, swap] = await Promise.all([getSchedulerConfig(), getSwapSettings()])
+    const actor = await requireActor()
+    const [scheduler, swap, leaveRecorders] = await Promise.all([getSchedulerConfig(), getSwapSettings(), getLeaveRecorders()])
     const admin = getAdminClient()
     const { data: schedulers } = await admin.from('shift_schedulers').select('user_id,created_at')
     const ids = (schedulers ?? []).map((s) => String(s.user_id))
@@ -21,6 +22,8 @@ export async function GET() {
       scheduler,
       swap,
       schedulers: (schedulers ?? []).map((s) => ({ userId: String(s.user_id), name: names[String(s.user_id)] ?? '' })),
+      leaveRecorders,
+      canManageLeaveRecorders: actor.role === 'Admin',
     }
   })
 }
@@ -40,6 +43,8 @@ const putSchema = z.object({
   swap: z.object({ requiresApproval: z.boolean() }).optional(),
   addScheduler: z.string().uuid().optional(),
   removeScheduler: z.string().uuid().optional(),
+  addLeaveRecorder: z.string().uuid().optional(),
+  removeLeaveRecorder: z.string().uuid().optional(),
 })
 
 export async function PUT(request: Request) {
@@ -48,6 +53,10 @@ export async function PUT(request: Request) {
     const body = await readJson(request, putSchema)
     const admin = getAdminClient()
     const now = new Date().toISOString()
+
+    if ((body.addLeaveRecorder || body.removeLeaveRecorder) && actor.role !== 'Admin') {
+      throw new HttpError(403, 'เฉพาะ Admin เท่านั้นที่จัดการรายชื่อผู้บันทึกทะเบียนได้')
+    }
 
     if (body.scheduler) {
       const { error } = await admin.from('shift_settings')
@@ -66,6 +75,16 @@ export async function PUT(request: Request) {
     }
     if (body.removeScheduler) {
       const { error } = await admin.from('shift_schedulers').delete().eq('user_id', body.removeScheduler)
+      if (error) throw new HttpError(500, error.message)
+    }
+    if (body.addLeaveRecorder) {
+      const { error } = await admin.from('shift_leave_recorders')
+        .upsert({ user_id: body.addLeaveRecorder, granted_by: actor.id })
+      if (error) throw new HttpError(500, error.message)
+    }
+    if (body.removeLeaveRecorder) {
+      const { error } = await admin.from('shift_leave_recorders')
+        .delete().eq('user_id', body.removeLeaveRecorder)
       if (error) throw new HttpError(500, error.message)
     }
     return { ok: true }

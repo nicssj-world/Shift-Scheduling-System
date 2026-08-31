@@ -8,6 +8,8 @@ export type SlotDef = {
   /** may be 1440 for a shift ending at 24:00 */
   endMin: number
   hours: number
+  /** Explicitly marks a shift after which the configurable OT rest applies. */
+  triggersRestAfterNight?: boolean
   requiredByDayClass: Record<DayClass, number>
 }
 
@@ -47,27 +49,34 @@ export type StaffIn = {
 
 export type JobIn = { id: string; code: string; sortOrder: number }
 
-/** Assignment from the previous month used for boundary constraints + fairness carry-in. */
+/** Assignment from a completed prior month used for boundary constraints + fairness carry-in. */
 export type CarryIn = {
   /** userId → assignments near the month boundary: [{date, code}] */
   assignments: Record<string, { date: string; code: string }[]>
-  /** userId → shift type code → historical count (previous month only) */
+  /** userId → assignments in the first six days of the next completed month. */
+  futureAssignments?: Record<string, { date: string; code: string }[]>
+  /** userId → shift type code → historical count (rolling fairness window) */
   shiftTypeCounts: Record<string, Record<string, number>>
-  /** userId → job code → historical count (previous month only) */
+  /** userId → job code → historical count (rolling fairness window) */
   jobCounts: Record<string, Record<string, number>>
-  /** userId → prior-month weekend/holiday shift count. */
+  /** userId → rolling-window weekend/holiday shift count. */
   weekendHolidayCounts: Record<string, number>
-  /** Prior-month co-worker pair counts, used to avoid restarting the same
+  /** Rolling-window co-worker pair counts, used to avoid restarting the same
    * pairings at every month boundary. */
   pairCounts: Record<string, Record<string, number>>
   /** Regular 08:00–16:00 work dates near the previous-month boundary.
    * These are not OT and do not count toward shift totals, but they do count
    * toward the hard 16-hour continuous-work limit. */
   regularWorkDates: string[]
-  /** userId → total shifts ever worked on this team, across all prior
-   *  months. Seeds fairness scoring so someone who got the "extra" shift
-   *  one month is deprioritized in later months instead of staying stuck
-   *  with it — the odd shift rotates through everyone over time. */
+  /** Calendar dates in the previous boundary for which a completed roster is
+   * known, including dates with no OT assignment (which are valid days off). */
+  previousKnownDates?: string[]
+  /** Regular work dates in the first six days of the next completed month. */
+  futureRegularWorkDates?: string[]
+  /** Calendar dates in that next-month boundary for which the roster is known,
+   * including days with no assignment. */
+  futureKnownDates?: string[]
+  /** userId → shifts worked in the configured rolling fairness window. */
   totalCounts: Record<string, number>
 }
 
@@ -79,6 +88,8 @@ export type SchedulerInput = {
   unavailable: Record<string, string[]>
   /** empty array when the team has no job rotation */
   jobs: JobIn[]
+  /** When true, each required position must receive a distinct active job. */
+  usesJobs?: boolean
   carryIn: CarryIn
   config: SchedulerConfig
 }

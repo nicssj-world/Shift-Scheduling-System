@@ -98,6 +98,25 @@ describe('validateAssignments', () => {
     expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(true)
   })
 
+  it('does not apply post-night OT rest to implicit regular work', () => {
+    const violations = validateAssignments(
+      ctx({ config: { ...DEFAULT_CONFIG, minRestHoursAfterNight: 12 } }),
+      [a('2026-08-03', 'N', 'u01')],
+    )
+    expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(false)
+  })
+
+  it('honors an explicit non-night flag even for a midnight-start shift', () => {
+    const slots = makeSlots(0).map((slot) => slot.code === 'N'
+      ? { ...slot, triggersRestAfterNight: false }
+      : slot)
+    const violations = validateAssignments(
+      ctx({ slots, config: { ...DEFAULT_CONFIG, minRestHoursAfterNight: 12, requireWeeklyDayOff: false } }),
+      [a('2026-08-03', 'N', 'u01'), a('2026-08-03', 'A', 'u01')],
+    )
+    expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(false)
+  })
+
   it('flags exceeding max shifts per month', () => {
     const violations = validateAssignments(
       ctx({ config: { ...DEFAULT_CONFIG, maxShiftsPerMonth: 2 } }),
@@ -133,5 +152,118 @@ describe('validateAssignments', () => {
     )
     expect(withA4.some((v) => v.rule === 'overlap')).toBe(true)
     expect(violations).toBeDefined()
+  })
+
+  it('flags structural assignment errors in production validation mode', () => {
+    const slots = makeSlots(0).map((slot) => slot.code === 'A' ? { ...slot, requiredByDayClass: { weekday: 0, weekend: 0, holiday: 0 } } : slot)
+    const violations = validateAssignments({
+      ...ctx({ slots, exactCoverage: true }),
+      shiftTypes: [
+        { id: 'st-a', code: 'A', isActive: true },
+        { id: 'st-old', code: 'OLD', isActive: false },
+      ],
+      members: [{ userId: 'u01', isActive: true }],
+      jobs: [{ id: 'job-1', code: 'J1', sortOrder: 1 }],
+      usesJobs: true,
+    }, [
+      a('2026-08-03', 'A', 'u02'),
+      { ...a('2026-08-04', 'OLD', 'u01'), shiftTypeId: 'st-old' },
+      { ...a('2026-08-05', 'A', 'u01'), jobId: 'bad-job' },
+      { ...a('2026-09-01', 'A', 'u01') },
+    ])
+
+    expect(violations.map((violation) => violation.rule)).toEqual(expect.arrayContaining([
+      'non_team_member', 'inactive_shift', 'invalid_job', 'date_out_of_range',
+    ]))
+  })
+
+  it('treats overstaffing on a zero-requirement slot as an error in exact mode', () => {
+    const violations = validateAssignments({ ...ctx({ exactCoverage: true }), slots: makeSlots(0) }, [a('2026-08-03', 'A', 'u01')])
+    expect(violations.some((violation) => violation.rule === 'overstaffed' && violation.severity === 'error')).toBe(true)
+  })
+
+  it('requires one distinct active Job for every required position', () => {
+    const slot = makeSlots(2).find((item) => item.code === 'A')!
+    const violations = validateAssignments({
+      ...ctx({ days: [{ date: '2026-08-03', dayClass: 'weekday' }], slots: [slot], exactCoverage: true }),
+      shiftTypes: [{ id: slot.shiftTypeId, code: slot.code, isActive: true }],
+      members: [{ userId: 'u01' }, { userId: 'u02' }],
+      jobs: [{ id: 'job-1', code: 'J1', sortOrder: 1 }, { id: 'job-2', code: 'J2', sortOrder: 2 }],
+      usesJobs: true,
+    }, [
+      { ...a('2026-08-03', 'A', 'u01'), jobId: 'job-1' },
+      { ...a('2026-08-03', 'A', 'u02'), jobId: 'job-1' },
+    ])
+    expect(violations.some((violation) => violation.rule === 'job_coverage')).toBe(true)
+  })
+
+  it('checks the first week across the previous-month boundary', () => {
+    const days = [
+      { date: '2026-08-01', dayClass: 'weekend' as const },
+      { date: '2026-08-02', dayClass: 'weekend' as const },
+      { date: '2026-08-03', dayClass: 'weekday' as const },
+      { date: '2026-08-04', dayClass: 'weekday' as const },
+      { date: '2026-08-05', dayClass: 'weekday' as const },
+      { date: '2026-08-06', dayClass: 'weekday' as const },
+      { date: '2026-08-07', dayClass: 'weekday' as const },
+    ]
+    const violations = validateAssignments({
+      ...ctx({ days, config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: true } }),
+      carryIn: {
+        assignments: { u01: [{ date: '2026-07-27', code: 'A' }, { date: '2026-07-28', code: 'A' }, { date: '2026-07-29', code: 'A' }, { date: '2026-07-30', code: 'A' }, { date: '2026-07-31', code: 'A' }] },
+        shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+        regularWorkDates: [], totalCounts: {},
+      },
+    }, days.map((day) => a(day.date, 'A', 'u01')))
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off')).toBe(true)
+  })
+
+  it('counts approved boundary leave as the weekly day off', () => {
+    const violations = validateAssignments({
+      ...ctx({ unavailable: { u01: ['2026-07-31'] } }),
+      carryIn: {
+        assignments: {},
+        shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+        regularWorkDates: ['2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31'],
+        totalCounts: {},
+      },
+    }, [a('2026-08-01', 'A', 'u01'), a('2026-08-02', 'A', 'u01')])
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off')).toBe(false)
+  })
+
+  it('treats a stale assignment on approved leave as a day off for weekly rest', () => {
+    const week = ['2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09']
+    const violations = validateAssignments({
+      ...ctx({ unavailable: { u01: ['2026-08-05'] } }),
+      carryIn: {
+        assignments: {}, shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+        regularWorkDates: [], totalCounts: {},
+      },
+    }, week.map((date) => a(date, 'A', 'u01')))
+    expect(violations.some((violation) => violation.rule === 'leave')).toBe(true)
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off')).toBe(false)
+  })
+
+  it('warns when a trailing boundary week cannot yet be proven', () => {
+    const violations = validateAssignments(ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: true } }), [
+      a('2026-08-03', 'A', 'u01'),
+    ])
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off_pending' && violation.severity === 'warning')).toBe(true)
+  })
+
+  it('hard-checks a trailing boundary week once the next roster is known', () => {
+    const nextDates = ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06']
+    const violations = validateAssignments({
+      ...ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: true } }),
+      carryIn: {
+        assignments: {},
+        futureAssignments: { u01: nextDates.map((date) => ({ date, code: 'A' })) },
+        futureKnownDates: nextDates,
+        shiftTypeCounts: {}, jobCounts: {}, weekendHolidayCounts: {}, pairCounts: {},
+        regularWorkDates: [], futureRegularWorkDates: [], totalCounts: {},
+      },
+    }, [a('2026-08-31', 'A', 'u01')])
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off' && violation.date === '2026-08-31')).toBe(true)
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off_pending')).toBe(false)
   })
 })

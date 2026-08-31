@@ -33,7 +33,7 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
         { href: '/schedule', label: 'ตารางเวร', icon: <CalendarDays size={17} />, show: true },
         { href: '/schedule/manage', label: 'จัดตารางเวร', icon: <CalendarCog size={17} />, show: actor.isScheduler },
         { href: '/swaps', label: 'แลก/ขายเวร', icon: <ArrowLeftRight size={17} />, show: true },
-        { href: '/leaves', label: 'วันลา', icon: <Palmtree size={17} />, show: true },
+        { href: '/leaves', label: 'ทะเบียนวันลา', icon: <Palmtree size={17} />, show: true },
       ],
     },
     {
@@ -88,6 +88,7 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={false}
                   onClick={() => setMenuOpen(false)}
                   className={`flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors ${
                     active ? 'bg-brand-600 text-white shadow-sm shadow-brand-600/30' : 'text-slate-600 hover:bg-brand-50 hover:text-brand-800'

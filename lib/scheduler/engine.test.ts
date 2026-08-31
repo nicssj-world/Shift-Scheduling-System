@@ -65,7 +65,7 @@ describe('generateSchedule', () => {
       },
     ]
     const staff = makeStaff(31)
-    // The previous month had three people one shift behind. Lifetime
+    // The previous month had three people one shift behind. Rolling-window
     // fairness may influence who receives the extra shift, but must never
     // make the current month's totals differ by more than one.
     const totalCounts = Object.fromEntries(staff.map((member) => [member.userId, 9]))
@@ -149,7 +149,7 @@ describe('generateSchedule', () => {
     expect(bad).toEqual([])
   })
 
-  it('deprioritizes whoever already has more lifetime shifts carried in from prior months', () => {
+  it('deprioritizes whoever already has more rolling-window shifts carried in', () => {
     // Same scenario the user described: last month one person ended up with
     // an extra shift versus everyone else. This month, carry-in totals
     // should make the scheduler favor catching everyone else up rather than
@@ -167,7 +167,7 @@ describe('generateSchedule', () => {
     })
     const result = generateSchedule(input)
 
-    // u01 entered the month already ahead — the fix should give them the
+    // u01 entered the rolling window already ahead — the fix should give them the
     // FEWEST new shifts this month (ideally none, to let the others catch up).
     const u01Total = result.stats['u01'].total
     const othersMin = Math.min(...staff.filter((s) => s.userId !== 'u01').map((s) => result.stats[s.userId].total))
@@ -191,6 +191,17 @@ describe('generateSchedule', () => {
     }
     // every assignment got a job
     expect(result.assignments.every((a) => a.jobId !== null)).toBe(true)
+  })
+
+  it('does not attach Jobs when the team policy explicitly disables Job rotation', () => {
+    const slots = makeSlots(1).filter((slot) => slot.code === 'A')
+    const result = generateSchedule(baseInput({
+      slots,
+      staff: makeStaff(4),
+      jobs: FOUR_JOBS,
+      usesJobs: false,
+    }))
+    expect(result.assignments.every((assignment) => assignment.jobId === null)).toBe(true)
   })
 
   it('spreads out who works together instead of locking the same pair in repeatedly', () => {
@@ -225,8 +236,60 @@ describe('generateSchedule', () => {
     const input = baseInput({ staff: makeStaff(3) })
     const result = generateSchedule(input)
     expect(result.violations.some((v) => v.rule === 'understaffed')).toBe(true)
+    expect(result.violations.find((v) => v.rule === 'understaffed')?.message).toContain('ผู้สมัครถูกตัดออก:')
     const errors = validateAssignments(input, result.assignments)
       .filter((v) => v.severity === 'error' && v.rule !== 'understaffed')
     expect(errors).toEqual([])
+  })
+
+  it('repairs a greedy dead-end by moving one earlier assignment', () => {
+    const slot = {
+      shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      requiredByDayClass: { weekday: 0, weekend: 1, holiday: 0 } as const,
+    }
+    const input = baseInput({
+      days: [
+        { date: '2026-08-01', dayClass: 'weekend' },
+        { date: '2026-08-02', dayClass: 'weekend' },
+        { date: '2026-08-08', dayClass: 'weekend' },
+      ],
+      slots: [slot],
+      staff: makeStaff(3),
+      unavailable: { u01: ['2026-08-01'], u03: ['2026-08-08'] },
+      config: { ...DEFAULT_CONFIG, maxShiftsPerMonth: 1, requireWeeklyDayOff: false },
+    })
+    const result = generateSchedule(input)
+
+    expect(result.violations.filter((v) => v.rule === 'understaffed')).toEqual([])
+    expect(result.assignments).toHaveLength(3)
+    expect(new Set(result.assignments.map((assignment) => assignment.userId))).toEqual(new Set(['u01', 'u02', 'u03']))
+    expect(validateAssignments(input, result.assignments).filter((v) => v.severity === 'error')).toEqual([])
+  })
+
+  it('repairs a two-hop dead-end by cascading an owner move', () => {
+    const slot = {
+      shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      requiredByDayClass: { weekday: 0, weekend: 1, holiday: 0 } as const,
+    }
+    const input = baseInput({
+      days: [
+        { date: '2026-08-01', dayClass: 'weekend' },
+        { date: '2026-08-02', dayClass: 'weekend' },
+        { date: '2026-08-30', dayClass: 'weekend' },
+      ],
+      slots: [slot],
+      staff: makeStaff(3),
+      // u03 is the only person unavailable for the final slot. The greedy
+      // pass leaves a max-shifts dead-end that needs a two-owner cascade.
+      unavailable: { u03: ['2026-08-30'] },
+      carryIn: { ...EMPTY_CARRY_IN, totalCounts: { u01: 0, u02: 0, u03: 10 } },
+      config: { ...DEFAULT_CONFIG, maxShiftsPerMonth: 1, requireWeeklyDayOff: false },
+    })
+    const result = generateSchedule(input)
+
+    expect(result.violations.filter((v) => v.rule === 'understaffed')).toEqual([])
+    expect(result.assignments).toHaveLength(3)
+    expect(new Set(result.assignments.map((assignment) => assignment.userId))).toEqual(new Set(['u01', 'u02', 'u03']))
+    expect(validateAssignments(input, result.assignments).filter((v) => v.severity === 'error')).toEqual([])
   })
 })

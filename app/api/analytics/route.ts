@@ -1,10 +1,28 @@
 import { requireScheduler } from '@/lib/server/auth'
 import { bangkokDateString, datesOfMonth, nextMonth, previousMonth, thaiMonthLabel } from '@/lib/dates'
 import {
-  buildDays, getAssignments, getRequirements, getSchedulerConfig, getTeamMembers, getTeams,
+  classifyDays, getHolidays, getRequirements, getSchedulerConfig, getTeamMembersForTeams, getTeams,
 } from '@/lib/server/data'
+import { getAttendanceMonthlyTotals } from '@/lib/server/attendance'
+import { HttpError } from '@/lib/server/errors'
 import { respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
+
+type AnalyticsSchedule = { id: string; team_id: string; month: string }
+type AnalyticsAssignment = { schedule_id: string; user_id: string }
+
+function requiredForDays(
+  days: Array<{ dayClass: string }>,
+  requirements: Array<{ day_class: string; required_count: number }>,
+) {
+  let required = 0
+  for (const day of days) {
+    for (const requirement of requirements) {
+      if (requirement.day_class === day.dayClass) required += requirement.required_count
+    }
+  }
+  return required
+}
 
 /** Rule-based workforce analytics: workload, over-standard, forecast, trend. */
 export async function GET() {
@@ -12,8 +30,6 @@ export async function GET() {
     await requireScheduler()
     const admin = getAdminClient()
     const currentMonth = bangkokDateString().slice(0, 7)
-    const config = await getSchedulerConfig()
-    const teams = (await getTeams()).filter((t) => t.is_active)
 
     // last 6 months incl. current
     const months: string[] = []
@@ -22,33 +38,98 @@ export async function GET() {
       months.unshift(cursor)
       cursor = previousMonth(cursor)
     }
+    const forecastMonth = nextMonth(currentMonth)
+    const rangeMonths = [...months, forecastMonth]
+    const rangeStart = datesOfMonth(months[0])[0]
+    const rangeEndDates = datesOfMonth(forecastMonth)
+    const rangeEnd = rangeEndDates[rangeEndDates.length - 1]
+
+    // Load shared reference data and the holiday range in parallel. The previous
+    // implementation fetched requirements, holidays, schedules, assignments and
+    // leaves inside nested month/team loops, creating a large query waterfall.
+    const [config, allTeams, allRequirements, holidays] = await Promise.all([
+      getSchedulerConfig(),
+      getTeams(),
+      getRequirements(),
+      getHolidays(rangeStart, rangeEnd),
+    ])
+    const teams = allTeams.filter((t) => t.is_active)
+    const teamIds = teams.map((team) => team.id)
+
+    // Fetch active members once after the team list is known. This is kept
+    // separate from the reference-data batch above so an empty team list still
+    // returns quickly without an unnecessary profiles query.
+    const activeMembersPromise = teamIds.length > 0 ? getTeamMembersForTeams(teamIds) : Promise.resolve([])
+
+    const requirementsByTeam = new Map<string, typeof allRequirements>()
+    for (const requirement of allRequirements) {
+      const teamRequirements = requirementsByTeam.get(requirement.team_id) ?? []
+      teamRequirements.push(requirement)
+      requirementsByTeam.set(requirement.team_id, teamRequirements)
+    }
+    const daysByMonth = new Map(
+      rangeMonths.map((month) => [month, classifyDays(datesOfMonth(month), holidays)] as const),
+    )
+
+    const schedulesQuery = teamIds.length === 0
+      ? Promise.resolve({ data: [] as AnalyticsSchedule[], error: null })
+      : admin
+        .from('shift_schedules')
+        .select('id,team_id,month')
+        .in('team_id', teamIds)
+        .in('month', months.map((month) => `${month}-01`))
+    const attendanceTotalsPromise = getAttendanceMonthlyTotals(rangeStart, rangeEnd)
+    const [activeMembers, scheduleResult, attendanceTotals] = await Promise.all([
+      activeMembersPromise,
+      schedulesQuery,
+      attendanceTotalsPromise,
+    ])
+    const { data: scheduleRows, error: schedulesError } = scheduleResult as unknown as {
+      data: AnalyticsSchedule[] | null
+      error: { message: string } | null
+    }
+    if (schedulesError) throw new HttpError(500, schedulesError.message)
+
+    const nameByUser = new Map(activeMembers.map((m) => [m.user_id, m.displayName]))
+    const totalStaff = new Set(activeMembers.map((m) => m.user_id)).size
+
+    const schedules = (scheduleRows ?? []) as unknown as AnalyticsSchedule[]
+    const scheduleIds = schedules.map((schedule) => String(schedule.id))
+    const { data: assignmentRows, error: assignmentsError } = scheduleIds.length === 0
+      ? { data: [] as AnalyticsAssignment[], error: null }
+      : await admin
+        .from('shift_assignments')
+        .select('schedule_id,user_id')
+        .in('schedule_id', scheduleIds)
+    if (assignmentsError) throw new HttpError(500, assignmentsError.message)
+
+    const scheduleByKey = new Map<string, string>()
+    for (const schedule of schedules) {
+      scheduleByKey.set(`${String(schedule.team_id)}|${String(schedule.month).slice(0, 10)}`, String(schedule.id))
+    }
+    const assignmentsBySchedule = new Map<string, AnalyticsAssignment[]>()
+    for (const assignment of (assignmentRows ?? []) as unknown as AnalyticsAssignment[]) {
+      const scheduleAssignments = assignmentsBySchedule.get(String(assignment.schedule_id)) ?? []
+      scheduleAssignments.push(assignment)
+      assignmentsBySchedule.set(String(assignment.schedule_id), scheduleAssignments)
+    }
+    const attendanceByMonth = new Map(attendanceTotals.map((row) => [row.month, row.total]))
+    const leaveCountByMonth = new Map(rangeMonths.map((month) => [month, attendanceByMonth.get(month) ?? 0] as const))
 
     const trend: { month: string; label: string; filled: number; required: number; leaves: number }[] = []
     const personTotals: Record<string, { name: string; total: number; months: Record<string, number> }> = {}
     const insights: { severity: 'info' | 'warning' | 'error'; text: string }[] = []
 
-    const memberMaps = await Promise.all(teams.map((t) => getTeamMembers(t.id)))
-    const nameByUser = new Map(memberMaps.flat().map((m) => [m.user_id, m.displayName]))
-    const totalStaff = new Set(memberMaps.flat().map((m) => m.user_id)).size
-
     for (const month of months) {
-      const dates = datesOfMonth(month)
-      const days = await buildDays(month)
+      const days = daysByMonth.get(month) ?? []
       let filled = 0
       let required = 0
 
       for (const team of teams) {
-        const requirements = await getRequirements(team.id)
-        for (const day of days) {
-          for (const r of requirements) {
-            if (r.day_class === day.dayClass) required += r.required_count
-          }
-        }
-        const { data: schedule } = await admin
-          .from('shift_schedules').select('id')
-          .eq('team_id', team.id).eq('month', `${month}-01`).maybeSingle()
-        if (!schedule) continue
-        const assignments = await getAssignments(String(schedule.id))
+        required += requiredForDays(days, requirementsByTeam.get(team.id) ?? [])
+        const scheduleId = scheduleByKey.get(`${team.id}|${month}-01`)
+        if (!scheduleId) continue
+        const assignments = assignmentsBySchedule.get(scheduleId) ?? []
         filled += assignments.length
         for (const a of assignments) {
           const userId = String(a.user_id)
@@ -58,14 +139,9 @@ export async function GET() {
         }
       }
 
-      const { data: leaves } = await admin
-        .from('shift_leaves').select('id', { count: 'exact', head: true })
-        .eq('status', 'approved')
-        .lte('start_date', dates[dates.length - 1])
-        .gte('end_date', dates[0])
       trend.push({
         month, label: thaiMonthLabel(month), filled, required,
-        leaves: (leaves as unknown as { count?: number })?.count ?? 0,
+        leaves: leaveCountByMonth.get(month) ?? 0,
       })
     }
 
@@ -91,29 +167,17 @@ export async function GET() {
     }
 
     // forecast next month: capacity vs demand
-    const forecastMonth = nextMonth(currentMonth)
-    const forecastDays = await buildDays(forecastMonth)
-    const forecastDates = datesOfMonth(forecastMonth)
+    const forecastDays = daysByMonth.get(forecastMonth) ?? []
     let demand = 0
     for (const team of teams) {
-      const requirements = await getRequirements(team.id)
-      for (const day of forecastDays) {
-        for (const r of requirements) {
-          if (r.day_class === day.dayClass) demand += r.required_count
-        }
-      }
+      demand += requiredForDays(forecastDays, requirementsByTeam.get(team.id) ?? [])
     }
-    const { data: futureLeaves } = await admin
-      .from('shift_leaves').select('user_id,start_date,end_date')
-      .eq('status', 'approved')
-      .lte('start_date', forecastDates[forecastDates.length - 1])
-      .gte('end_date', forecastDates[0])
-    const leaveDaysNext = (futureLeaves ?? []).length
+    const leaveDaysNext = leaveCountByMonth.get(forecastMonth) ?? 0
     const capacity = totalStaff * config.maxShiftsPerMonth
     const utilization = capacity > 0 ? Math.round((demand / capacity) * 100) : 0
     insights.push({
       severity: utilization > 85 ? 'error' : utilization > 70 ? 'warning' : 'info',
-      text: `คาดการณ์เดือน${thaiMonthLabel(forecastMonth)}: ต้องการ ${demand} เวร จากกำลังคนสูงสุด ${capacity} เวร (ใช้ ${utilization}%)${leaveDaysNext > 0 ? ` · มีใบลาแล้ว ${leaveDaysNext} รายการ` : ''}`,
+      text: `คาดการณ์เดือน${thaiMonthLabel(forecastMonth)}: ต้องการ ${demand} เวร จากกำลังคนสูงสุด ${capacity} เวร (ใช้ ${utilization}%)${leaveDaysNext > 0 ? ` · มีรายการทะเบียนแล้ว ${leaveDaysNext} รายการ` : ''}`,
     })
     if (utilization > 85) {
       insights.push({ severity: 'error', text: 'แนวโน้มขาดแคลนบุคลากร: อัตราใช้กำลังคนสูงกว่า 85% ควรพิจารณาเพิ่มคนในทีมเวร' })

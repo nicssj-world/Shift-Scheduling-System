@@ -1,104 +1,124 @@
 import { z } from 'zod'
-import { requireActor } from '@/lib/server/auth'
+import { bangkokMonthNow } from '@/lib/dates'
+import { ATTENDANCE_CODES, type AttendanceCode } from '@/lib/types'
+import { isIsoDate, isIsoMonth } from '@/lib/attendance'
+import { assertAttendanceDatesOpen, canManageAttendance, getAttendanceGrid, getAttendanceHistory } from '@/lib/server/attendance'
+import { requireActor, requireAttendanceRecorder } from '@/lib/server/auth'
 import { HttpError } from '@/lib/server/errors'
-import { notifyUsers } from '@/lib/server/notify'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
-import { thaiShortDate } from '@/lib/dates'
-import { LEAVE_TYPE_TH } from '@/lib/types'
+
+const scopeSchema = z.enum(['all', 'mine'])
 
 export async function GET(request: Request) {
   return respond(async () => {
     const actor = await requireActor()
     const url = new URL(request.url)
-    const scope = url.searchParams.get('scope') ?? 'mine'
-    const from = url.searchParams.get('from') // YYYY-MM-DD
-    const to = url.searchParams.get('to')
-    const admin = getAdminClient()
+    const scope = scopeSchema.parse(url.searchParams.get('scope') ?? 'all')
+    const canManage = await canManageAttendance(actor)
 
-    let query = admin.from('shift_leaves').select('*').order('start_date', { ascending: false }).limit(500)
     if (scope === 'all') {
-      if (!actor.isAdmin && !actor.isManager && !actor.isScheduler) throw new HttpError(403, 'ไม่มีสิทธิ์ดูวันลาทุกคน')
-    } else {
-      query = query.eq('user_id', actor.id)
+      const month = url.searchParams.get('month') ?? bangkokMonthNow()
+      if (!isIsoMonth(month)) throw new HttpError(400, 'รูปแบบเดือนไม่ถูกต้อง (YYYY-MM)')
+      const grid = await getAttendanceGrid(month)
+      return {
+        scope,
+        canManage,
+        canManageHolidays: actor.isAdmin,
+        me: actor.id,
+        ...grid,
+        availablePeople: canManage ? grid.availablePeople : [],
+      }
     }
-    if (from) query = query.gte('end_date', from)
-    if (to) query = query.lte('start_date', to)
-    const { data, error } = await query
-    if (error) throw new HttpError(500, error.message)
-    const rows = (data ?? []) as Record<string, unknown>[]
 
-    const userIds = [...new Set(rows.map((r) => String(r.user_id)))]
-    let names: Record<string, string> = {}
-    if (userIds.length > 0) {
-      const { data: profiles } = await admin.from('profiles').select('id,name,dept').in('id', userIds)
-      names = Object.fromEntries((profiles ?? []).map((p) => [String(p.id), String(p.name)]))
-    }
-    return { leaves: rows.map((r) => ({ ...r, userName: names[String(r.user_id)] ?? '' })), me: actor.id }
+    const from = url.searchParams.get('from')
+    const to = url.searchParams.get('to')
+    if (from && !isIsoDate(from)) throw new HttpError(400, 'from ต้องเป็นวันที่รูปแบบ YYYY-MM-DD')
+    if (to && !isIsoDate(to)) throw new HttpError(400, 'to ต้องเป็นวันที่รูปแบบ YYYY-MM-DD')
+    if (from && to && from > to) throw new HttpError(400, 'ช่วงวันที่ไม่ถูกต้อง')
+    const cursor = url.searchParams.get('cursor')
+    const rawLimit = Number(url.searchParams.get('limit') ?? 50)
+    const limit = Number.isInteger(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 50
+    const history = await getAttendanceHistory(actor.id, from, to, cursor, limit)
+    return { scope, canManage, me: actor.id, from, to, ...history }
   })
 }
 
 const createSchema = z.object({
-  userId: z.string().uuid().optional(),
-  leaveType: z.enum(['vacation', 'sick', 'personal', 'other']),
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  dayPart: z.enum(['full', 'half_am', 'half_pm']).default('full'),
-  note: z.string().max(500).optional(),
+  userId: z.string().uuid(),
+  code: z.enum(ATTENDANCE_CODES),
+  dates: z.array(z.string()).min(1).max(366),
+  note: z.string().trim().max(500).optional(),
 })
+
+function validateDates(dates: string[]) {
+  const unique = [...new Set(dates)]
+  if (unique.length !== dates.length) throw new HttpError(400, 'ไม่ควรมีวันที่ซ้ำกันในรายการเดียว')
+  if (dates.some((date) => !isIsoDate(date))) throw new HttpError(400, 'วันที่ต้องเป็นรูปแบบ YYYY-MM-DD และเป็นวันที่จริง')
+  return [...dates].sort()
+}
 
 export async function POST(request: Request) {
   return respond(async () => {
-    const actor = await requireActor()
+    const actor = await requireAttendanceRecorder()
     const body = await readJson(request, createSchema)
-    if (body.endDate < body.startDate) throw new HttpError(400, 'วันสิ้นสุดต้องไม่ก่อนวันเริ่ม')
-    if (body.dayPart !== 'full' && body.startDate !== body.endDate) {
-      throw new HttpError(400, 'ลาครึ่งวันต้องเป็นวันเดียว')
-    }
-
-    const isManagerEntry = Boolean(body.userId) && body.userId !== actor.id
-    if (isManagerEntry && !actor.isAdmin && !actor.isManager) {
-      throw new HttpError(403, 'เฉพาะ Admin/Manager คีย์วันลาให้คนอื่นได้')
-    }
-    const targetUserId = body.userId ?? actor.id
-    // Admin/Manager entries are approved immediately (their own or others')
-    const autoApproved = actor.isAdmin || actor.isManager
-
+    const dates = validateDates(body.dates)
+    await assertAttendanceDatesOpen(dates)
     const admin = getAdminClient()
-    const { data, error } = await admin.from('shift_leaves').insert({
-      user_id: targetUserId,
-      leave_type: body.leaveType,
-      start_date: body.startDate,
-      end_date: body.endDate,
-      day_part: body.dayPart,
-      note: body.note ?? null,
-      status: autoApproved ? 'approved' : 'pending',
-      requested_by: actor.id,
-      decided_by: autoApproved ? actor.id : null,
-      decided_at: autoApproved ? new Date().toISOString() : null,
-    }).select('*').single()
-    if (error) throw new HttpError(500, error.message)
 
-    const range = body.startDate === body.endDate
-      ? thaiShortDate(body.startDate)
-      : `${thaiShortDate(body.startDate)} – ${thaiShortDate(body.endDate)}`
-
-    if (!autoApproved) {
-      // notify approvers
-      const { data: managers } = await admin.from('profiles').select('id,role')
-        .or('role.eq.Admin,role.eq.Manager,role.eq.admin,role.eq.staff')
-      await notifyUsers((managers ?? []).map((m) => String(m.id)), {
-        type: 'leave_requested',
-        title: `${actor.name} แจ้ง${LEAVE_TYPE_TH[body.leaveType]} ${range}`,
-        link: '/leaves',
-      })
-    } else if (targetUserId !== actor.id) {
-      await notifyUsers([targetUserId], {
-        type: 'leave_recorded',
-        title: `บันทึก${LEAVE_TYPE_TH[body.leaveType]}ให้คุณ ${range}`,
-        link: '/leaves',
-      })
+    const { data: person, error: personError } = await admin
+      .from('profiles')
+      .select('id,status,deleted_at')
+      .eq('id', body.userId)
+      .maybeSingle()
+    if (personError) throw new HttpError(500, personError.message)
+    if (!person) throw new HttpError(404, 'ไม่พบบุคลากรที่เลือก')
+    if (String(person.status ?? 'active').toLowerCase() !== 'active' || person.deleted_at) {
+      throw new HttpError(400, 'ไม่สามารถบันทึกข้อมูลให้บุคลากรที่ไม่ active ได้')
     }
-    return { leave: data }
+
+    const { data: rosterEntry, error: rosterError } = await admin
+      .from('shift_leave_roster')
+      .select('user_id')
+      .eq('user_id', body.userId)
+      .is('removed_at', null)
+      .maybeSingle()
+    if (rosterError) throw new HttpError(500, rosterError.message)
+    if (!rosterEntry) throw new HttpError(400, 'กรุณาเพิ่มบุคลากรเข้าทะเบียนก่อนบันทึกรายการ')
+
+    const { data: existing, error: existingError } = await admin
+      .from('shift_attendance_records')
+      .select('record_date')
+      .eq('user_id', body.userId)
+      .eq('code', body.code)
+      .in('record_date', dates)
+      .is('deleted_at', null)
+    if (existingError) throw new HttpError(500, existingError.message)
+    const conflicts = (existing ?? []).map((row) => String(row.record_date)).sort()
+    if (conflicts.length > 0) {
+      throw new HttpError(409, `มีรายการ ${body.code} อยู่แล้วในวันที่ ${conflicts.join(', ')}`)
+    }
+
+    const now = new Date().toISOString()
+    const rows = dates.map((recordDate) => ({
+      user_id: body.userId,
+      record_date: recordDate,
+      code: body.code as AttendanceCode,
+      note: body.note || null,
+      source: 'manual' as const,
+      source_ref: null,
+      created_by: actor.id,
+      updated_by: actor.id,
+      updated_at: now,
+    }))
+    const { data, error } = await admin
+      .from('shift_attendance_records')
+      .insert(rows)
+      .select('*')
+    if (error) {
+      if (error.code === '23505') throw new HttpError(409, 'มีรหัสนี้ในวันเดียวกันอยู่แล้ว')
+      throw new HttpError(500, error.message)
+    }
+    return { records: data ?? [] }
   })
 }

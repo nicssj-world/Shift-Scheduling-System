@@ -64,6 +64,8 @@ export type StaffProfile = {
   role: Role
   dept: string | null
   phone: string | null
+  position_title: string | null
+  employment_type: string | null
 }
 
 export type Team = {
@@ -96,6 +98,8 @@ export type ShiftType = {
   start_time: string
   end_time: string
   hours: number
+  /** Explicitly controls whether this shift triggers the post-night OT rest rule. */
+  triggers_rest_after_night?: boolean
   color: string
   is_active: boolean
   sort_order: number
@@ -124,6 +128,7 @@ export type Holiday = {
   holiday_date: string
   name_th: string
   kind: 'public' | 'special'
+  source: 'manual' | 'google_th_holidays'
 }
 
 export type ScheduleStatus = 'draft' | 'published' | 'locked'
@@ -136,6 +141,8 @@ export type Schedule = {
   generated_at: string | null
   published_at: string | null
   locked_at: string | null
+  /** Monotonic roster version used for atomic manual edits and approvals. */
+  assignment_version?: number
 }
 
 export type Assignment = {
@@ -165,6 +172,109 @@ export type Leave = {
   decided_by: string | null
   decided_at: string | null
   created_at: string
+}
+
+/** Daily register codes imported from the Medical Technology leave workbook. */
+export const ATTENDANCE_CODES = [
+  'vacation', 'sick', 'sick_half', 'personal', 'personal_half',
+  'absent', 'late', 'early', 'vacation_half', 'maternity',
+] as const
+
+// Runtime lookup shared by API/server modules. Keep this beside the
+// canonical code list so imports from either the domain types or attendance
+// helpers cannot drift apart.
+export const ATTENDANCE_CODE_VALUES = new Set<string>(ATTENDANCE_CODES)
+
+export type AttendanceCode = (typeof ATTENDANCE_CODES)[number]
+
+export const ATTENDANCE_CODE_TH: Record<AttendanceCode, string> = {
+  vacation: 'พักร้อน',
+  sick: 'ป่วย',
+  sick_half: 'ป่วยครึ่งวัน',
+  personal: 'กิจ',
+  personal_half: 'กิจครึ่งวัน',
+  absent: 'ขาด',
+  late: 'สาย',
+  early: 'กลับก่อน',
+  vacation_half: 'พักร้อนครึ่งวัน',
+  maternity: 'คลอด',
+}
+
+export const ATTENDANCE_CODE_SHORT: Record<AttendanceCode, string> = {
+  vacation: 'พ',
+  sick: 'ป',
+  sick_half: 'ป/2',
+  personal: 'ก',
+  personal_half: 'ก/2',
+  absent: 'ข',
+  late: 'ส',
+  early: 'บ',
+  vacation_half: 'พ/2',
+  maternity: 'ค',
+}
+
+export const ATTENDANCE_REPORT_CATEGORIES = [
+  'vacation', 'sick', 'personal', 'absent', 'late', 'early', 'maternity',
+] as const
+
+export type AttendanceReportCategory = (typeof ATTENDANCE_REPORT_CATEGORIES)[number]
+
+export const ATTENDANCE_REPORT_CATEGORY_TH: Record<AttendanceReportCategory, string> = {
+  vacation: 'พัก',
+  sick: 'ป่วย',
+  personal: 'กิจ',
+  absent: 'ขาด',
+  late: 'สาย',
+  early: 'ก่อน',
+  maternity: 'คลอด',
+}
+
+export type AttendanceRecord = {
+  id: string
+  user_id: string
+  record_date: string
+  code: AttendanceCode
+  note: string | null
+  source: 'manual' | 'excel'
+  source_ref: string | null
+  created_by: string
+  created_at: string
+  updated_by: string | null
+  updated_at: string
+  deleted_by: string | null
+  deleted_at: string | null
+}
+
+export type LeaveRecorder = {
+  user_id: string
+  name: string
+  dept: string | null
+  granted_by: string
+  created_at: string
+}
+
+/** Vacation entitlement for one person in one fiscal year. fiscal_year is
+ * the Gregorian year in which the Oct-Sep fiscal year ends. */
+export type VacationBalance = {
+  user_id: string
+  fiscal_year: number
+  previous_days: number
+  current_days: number
+  created_by: string
+  created_at: string
+  updated_by: string
+  updated_at: string
+}
+
+export function attendanceReportCategory(code: AttendanceCode): AttendanceReportCategory {
+  if (code === 'vacation_half') return 'vacation'
+  if (code === 'sick_half') return 'sick'
+  if (code === 'personal_half') return 'personal'
+  return code as AttendanceReportCategory
+}
+
+export function attendanceReportValue(code: AttendanceCode): number {
+  return code.endsWith('_half') ? 0.5 : 1
 }
 
 export type SwapStatus =

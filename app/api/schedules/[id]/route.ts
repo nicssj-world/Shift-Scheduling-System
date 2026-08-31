@@ -32,9 +32,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           `ยังเผยแพร่ไม่ได้: ตารางมีข้อผิดพลาด ${hardErrors.length} จุด กรุณาแก้ไขหรือสร้างตารางอัตโนมัติใหม่ก่อน`,
         )
       }
-      const { error } = await admin.from('shift_schedules')
-        .update({ status: 'published', published_at: now, published_by: actor.id }).eq('id', id)
-      if (error) throw new HttpError(500, error.message)
+      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), {
+        status: 'published', published_at: now, published_by: actor.id,
+      })
       const [team, members] = await Promise.all([getTeam(schedule.team_id), getTeamMembers(schedule.team_id)])
       await notifyUsers(members.map((m) => m.user_id), {
         type: 'schedule_published',
@@ -44,9 +44,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       })
     } else if (action === 'unpublish') {
       if (schedule.status === 'locked') throw new HttpError(409, 'ต้องปลดล็อคก่อน')
-      const { error } = await admin.from('shift_schedules')
-        .update({ status: 'draft' }).eq('id', id)
-      if (error) throw new HttpError(500, error.message)
+      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), { status: 'draft' })
     } else if (action === 'lock') {
       if (schedule.status === 'draft') throw new HttpError(409, 'ต้องเผยแพร่ก่อนจึงจะล็อคได้')
       const ctx = await loadScheduleContext(id)
@@ -54,19 +52,40 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       if (hardErrors.length > 0) {
         throw new HttpError(409, `ยังล็อคไม่ได้: ตารางมีข้อผิดพลาด ${hardErrors.length} จุด`)
       }
-      const { error } = await admin.from('shift_schedules')
-        .update({ status: 'locked', locked_at: now, locked_by: actor.id }).eq('id', id)
-      if (error) throw new HttpError(500, error.message)
+      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), {
+        status: 'locked', locked_at: now, locked_by: actor.id,
+      })
     } else if (action === 'unlock') {
       if (!actor.isAdmin) throw new HttpError(403, 'เฉพาะ Admin เท่านั้นที่ปลดล็อคได้')
-      const { error } = await admin.from('shift_schedules')
-        .update({ status: 'published', locked_at: null, locked_by: null }).eq('id', id)
-      if (error) throw new HttpError(500, error.message)
+      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), {
+        status: 'published', locked_at: null, locked_by: null,
+      })
     }
 
     const updated = await getSchedule(id)
     return { schedule: updated }
   })
+}
+
+function scheduleVersion(schedule: { assignment_version?: number }) {
+  return Number(schedule.assignment_version ?? 0)
+}
+
+async function updateScheduleWithVersion(
+  admin: ReturnType<typeof getAdminClient>,
+  id: string,
+  expectedStatus: string,
+  expectedVersion: number,
+  values: Record<string, unknown>,
+) {
+  const { data, error } = await admin.from('shift_schedules')
+    .update(values)
+    .eq('id', id)
+    .eq('status', expectedStatus)
+    .eq('assignment_version', expectedVersion)
+    .select('id')
+  if (error) throw new HttpError(500, error.message)
+  if (!data || data.length === 0) throw new HttpError(409, 'ตารางมีการเปลี่ยนแปลงพร้อมกัน กรุณารีเฟรชแล้วลองใหม่')
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {

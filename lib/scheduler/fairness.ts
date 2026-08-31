@@ -7,11 +7,11 @@ export function emptyStats(): PersonStats {
 
 /**
  * Lower is better. Deterministic — no randomness anywhere.
- * `carryTotal` is the person's lifetime shift count on this team from all
- * prior months (see CarryIn.totalCounts) — folding it into the total-shifts
- * term is what makes the "extra" shift rotate through everyone over time
- * instead of sticking with whoever drew it first. `stats.total` itself stays
- * scoped to the current run so callers can still report "shifts this month".
+ * `carryTotal` is the person's completed-roster shift count in the bounded
+ * rolling window (see CarryIn.totalCounts) — folding it into the
+ * total-shifts term rotates the tied extra shift without letting a stale,
+ * lifetime history dominate. `stats.total` itself stays scoped to the current
+ * run so callers can still report "shifts this month".
  */
 export function fairnessScore(
   stats: PersonStats,

@@ -5,14 +5,14 @@ import { FileSpreadsheet, FileText } from 'lucide-react'
 import { Button, Card, EmptyState, ErrorNote, Field, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import { bangkokMonthNow, thaiMonthLabel } from '@/lib/dates'
-import { LEAVE_TYPE_TH, type LeaveType, type Team } from '@/lib/types'
+import { ATTENDANCE_REPORT_CATEGORIES, ATTENDANCE_REPORT_CATEGORY_TH, type Team } from '@/lib/types'
 import type { ScheduleBundle } from '@/components/schedule/schedule-view'
 import { buildRosterExportData } from '@/lib/reports/roster-data'
-import type { LeaveReportRow, OtReportRow } from '@/lib/reports/pdf'
+import type { AttendanceReportRow } from '@/lib/attendance'
+import type { OtReportRow } from '@/lib/reports/pdf'
 
 type ReportKind = 'roster' | 'leaves' | 'ot'
 
-type LeaveApiRow = { userId: string; name: string; dept: string | null; month: string; type: LeaveType; days: number }
 type OtApi = { month: string; shiftTypes: { code: string; name: string; hours: number }[]; rows: OtReportRow[] }
 
 export function ReportsView() {
@@ -26,7 +26,8 @@ export function ReportsView() {
   const [error, setError] = useState<string | null>(null)
 
   const [bundle, setBundle] = useState<ScheduleBundle | null>(null)
-  const [leaveRows, setLeaveRows] = useState<LeaveApiRow[] | null>(null)
+  const [leaveRows, setLeaveRows] = useState<AttendanceReportRow[] | null>(null)
+  const [leaveRange, setLeaveRange] = useState<{ from: string; to: string } | null>(null)
   const [otData, setOtData] = useState<OtApi | null>(null)
 
   useEffect(() => {
@@ -43,6 +44,7 @@ export function ReportsView() {
     setError(null)
     setBundle(null)
     setLeaveRows(null)
+    setLeaveRange(null)
     setOtData(null)
     try {
       if (kind === 'roster') {
@@ -50,8 +52,9 @@ export function ReportsView() {
         if (!data.schedule) throw new Error(`ยังไม่มีตารางเวรเดือน${thaiMonthLabel(month)} (หรือยังไม่เผยแพร่)`)
         setBundle(data)
       } else if (kind === 'leaves') {
-        const data = await api<{ rows: LeaveApiRow[] }>(`/api/reports/leaves?from=${fromMonth}&to=${toMonth}`)
+        const data = await api<{ rows: AttendanceReportRow[]; from: string; to: string }>(`/api/reports/leaves?from=${fromMonth}&to=${toMonth}`)
         setLeaveRows(data.rows)
+        setLeaveRange({ from: data.from, to: data.to })
       } else {
         const data = await api<OtApi>(`/api/reports/ot?month=${month}${teamId ? `&team=${teamId}` : ''}`)
         setOtData(data)
@@ -63,21 +66,17 @@ export function ReportsView() {
     }
   }
 
-  const leaveExportRows: LeaveReportRow[] = (leaveRows ?? []).map((r) => ({
-    name: r.name, dept: r.dept, month: r.month, typeTh: LEAVE_TYPE_TH[r.type] ?? r.type, days: r.days,
-  }))
-
   async function exportPdf() {
-    const { exportRosterPdf, exportLeavePdf, exportOtPdf } = await import('@/lib/reports/pdf')
+    const { exportRosterPdf, exportAttendancePdf, exportOtPdf } = await import('@/lib/reports/pdf')
     if (kind === 'roster' && bundle) exportRosterPdf(buildRosterExportData(bundle, month))
-    if (kind === 'leaves' && leaveRows) exportLeavePdf(leaveExportRows, fromMonth, toMonth)
+    if (kind === 'leaves' && leaveRows && leaveRange) exportAttendancePdf(leaveRows, leaveRange.from, leaveRange.to)
     if (kind === 'ot' && otData) exportOtPdf(otData.rows, otData.shiftTypes.filter((t) => otData.rows.some((r) => r.byType[t.code])).map((t) => t.code), month)
   }
 
   async function exportExcel() {
-    const { exportRosterExcel, exportLeaveExcel, exportOtExcel } = await import('@/lib/reports/excel')
+    const { exportRosterExcel, exportAttendanceExcel, exportOtExcel } = await import('@/lib/reports/excel')
     if (kind === 'roster' && bundle) exportRosterExcel(buildRosterExportData(bundle, month))
-    if (kind === 'leaves' && leaveRows) exportLeaveExcel(leaveExportRows, fromMonth, toMonth)
+    if (kind === 'leaves' && leaveRows && leaveRange) exportAttendanceExcel(leaveRows, leaveRange.from, leaveRange.to)
     if (kind === 'ot' && otData) exportOtExcel(otData.rows, otData.shiftTypes.filter((t) => otData.rows.some((r) => r.byType[t.code])).map((t) => t.code), month)
   }
 
@@ -91,7 +90,7 @@ export function ReportsView() {
         <div className="flex gap-1">
           {([
             ['roster', 'ตารางเวรรายเดือน'],
-            ['leaves', 'สรุปวันลา (เลือกช่วงเดือน)'],
+            ['leaves', 'สรุปทะเบียน (เลือกช่วงเดือน)'],
             ['ot', 'สรุป OT / สถิติปฏิบัติงาน'],
           ] as [ReportKind, string][]).map(([k, label]) => (
             <button
@@ -152,21 +151,22 @@ export function ReportsView() {
 
       {leaveRows && (
         <Card className="overflow-x-auto">
-          {leaveRows.length === 0 ? <EmptyState text="ไม่มีข้อมูลการลาในช่วงที่เลือก" /> : (
+          {leaveRows.length === 0 ? <EmptyState text="ไม่มีข้อมูลทะเบียนในช่วงที่เลือก" /> : (
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-line text-left text-slate-500">
-                  <th className="py-1.5">ชื่อ-สกุล</th><th>แผนก</th><th>เดือน</th><th>ประเภท</th><th className="text-right">วัน</th>
+                  <th className="py-1.5">ชื่อ-สกุล</th><th>งาน</th><th>ตำแหน่ง</th><th>ประเภทการจ้าง</th>
+                  {ATTENDANCE_REPORT_CATEGORIES.map((category) => <th key={category} className="text-right">{ATTENDANCE_REPORT_CATEGORY_TH[category]}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {leaveRows.map((r, i) => (
-                  <tr key={i} className="border-b border-line/60">
+                {leaveRows.map((r) => (
+                  <tr key={r.userId} className="border-b border-line/60">
                     <td className="py-1.5">{r.name}</td>
                     <td>{r.dept ?? '-'}</td>
-                    <td>{thaiMonthLabel(r.month)}</td>
-                    <td>{LEAVE_TYPE_TH[r.type] ?? r.type}</td>
-                    <td className="text-right font-semibold">{r.days}</td>
+                    <td>{r.positionTitle ?? '-'}</td>
+                    <td>{r.employmentType ?? '-'}</td>
+                    {ATTENDANCE_REPORT_CATEGORIES.map((category) => <td key={category} className="text-right font-semibold">{Number.isInteger(r[category]) ? r[category] : r[category].toFixed(1)}</td>)}
                   </tr>
                 ))}
               </tbody>

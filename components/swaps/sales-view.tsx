@@ -7,6 +7,7 @@ import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
 import { bangkokMonthNow, thaiMonthLabel, thaiShortDate } from '@/lib/dates'
 import { SALE_STATUS_TH, type SaleStatus } from '@/lib/types'
+import { useAssignmentReservationRealtime } from '@/components/swaps/use-assignment-reservation-realtime'
 
 type SaleRow = {
   id: string
@@ -101,15 +102,26 @@ export function SalesView() {
     setPage(1)
   }
 
-  async function loadCreateOptions(month: string) {
+  async function loadCreateOptions(month: string, preserveSelections = true) {
     setOptions(null)
     try {
-      setOptions(await api<{ mine: OptionShift[]; members: Member[] }>(`/api/sales/options?month=${month}`))
+      const next = await api<{ mine: OptionShift[]; members: Member[] }>(`/api/sales/options?month=${month}`)
+      const selectableIds = new Set(next.mine.filter((shift) => shift.selectable).map((shift) => shift.id))
+      const currentPicked = preserveSelections ? picked : new Set<string>()
+      const nextPicked = new Set([...currentPicked].filter((id) => selectableIds.has(id)))
+      if (nextPicked.size !== currentPicked.size) {
+        setError('มีเวรที่ถูกจองในคำขอแลก/ขายอื่น ระบบจึงนำออกจากรายการที่เลือกแล้ว')
+      }
+      setPicked(nextPicked)
+      if (nextPicked.size === 0) setBuyerId('')
+      setOptions(next)
     } catch (e) {
       setOptions({ mine: [], members: [] })
       setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
     }
   }
+
+  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth) })
 
   async function openCreate() {
     const month = fromMonth || toMonth || bangkokMonthNow()
@@ -119,7 +131,7 @@ export function SalesView() {
     setBuyerId('')
     setReason('')
     setError(null)
-    await loadCreateOptions(month)
+    await loadCreateOptions(month, false)
   }
 
   async function changeOptionMonth(month: string) {
@@ -127,7 +139,7 @@ export function SalesView() {
     setOptionMonth(month)
     setPicked(new Set())
     setBuyerId('')
-    await loadCreateOptions(month)
+    await loadCreateOptions(month, false)
   }
 
   function toggle(id: string) {

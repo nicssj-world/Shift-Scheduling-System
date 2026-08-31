@@ -30,6 +30,9 @@ export async function POST(request: Request) {
       holiday_date: body.holidayDate,
       name_th: body.nameTh,
       kind: body.kind,
+      source: 'manual',
+      source_event_id: null,
+      synced_at: null,
       created_by: actor.id,
     })
     if (error) throw new HttpError(500, error.message)

@@ -28,9 +28,9 @@ export async function getActor(): Promise<Actor | null> {
 
   const role = normalizeRole(asString(profile.role))
   // A designated scheduler (explicitly granted in shift_schedulers) has
-  // rights equivalent to Admin everywhere in this app, regardless of their
-  // base profiles.role — folding it into isAdmin means every existing
-  // isAdmin check automatically extends to them without touching each site.
+  // rights equivalent to Admin for scheduling/settings, regardless of their
+  // base profiles.role. Attendance uses requireAttendanceRecorder separately
+  // because its recorder list is intentionally narrower.
   const isAdmin = role === 'Admin' || Boolean(schedulerRow)
   const isManager = role === 'Manager'
   return {
@@ -64,6 +64,22 @@ export async function requireScheduler() {
 export async function requireAdmin() {
   const actor = await requireActor()
   if (!actor.isAdmin) throw new HttpError(403, 'ต้องเป็น Admin หรือผู้ได้รับมอบหมายจัดเวร')
+  return actor
+}
+
+/** Attendance records have their own narrow permission list. Do not use
+ * actor.isAdmin here: that flag intentionally includes designated schedulers
+ * for the rest of the scheduling application. */
+export async function requireAttendanceRecorder() {
+  const actor = await requireActor()
+  if (actor.role === 'Admin') return actor
+  const { data, error } = await getAdminClient()
+    .from('shift_leave_recorders')
+    .select('user_id')
+    .eq('user_id', actor.id)
+    .maybeSingle()
+  if (error) throw new HttpError(500, error.message)
+  if (!data) throw new HttpError(403, 'ไม่มีสิทธิ์บันทึกทะเบียนวันลาและการมาปฏิบัติงาน')
   return actor
 }
 

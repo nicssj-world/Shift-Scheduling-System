@@ -92,7 +92,7 @@ export function DashboardView() {
                 <div className="rounded-xl bg-amber-100 p-2.5 text-amber-700"><Palmtree size={20} /></div>
                 <div>
                   <div className="text-2xl font-bold">{data.onLeaveToday.length}</div>
-                  <div className="text-xs text-slate-500">ลางานวันนี้</div>
+              <div className="text-xs text-slate-500">ทะเบียนวันนี้</div>
                 </div>
               </div>
             </Card>
@@ -126,7 +126,7 @@ export function DashboardView() {
               )}
               {data.onLeaveToday.length > 0 && (
                 <div className="mt-3 rounded-xl bg-amber-50 p-2.5 text-xs">
-                  <b>ลาวันนี้:</b> {data.onLeaveToday.map((l) => `${l.name} (${l.type})`).join(', ')}
+                  <b>รายการวันนี้:</b> {data.onLeaveToday.map((l) => `${l.name} (${l.type})`).join(', ')}
                 </div>
               )}
             </Card>
@@ -166,8 +166,8 @@ export function DashboardView() {
               )}
             </Card>
             <Card>
-              <h2 className="mb-2 text-sm font-bold">วันลาแยกตามประเภท (เดือนนี้)</h2>
-              {data.leavesByType.length === 0 ? <EmptyState text="ไม่มีการลาเดือนนี้" /> : (
+              <h2 className="mb-2 text-sm font-bold">ทะเบียนแยกตามประเภท (เดือนนี้)</h2>
+              {data.leavesByType.length === 0 ? <EmptyState text="ไม่มีรายการทะเบียนเดือนนี้" /> : (
                 <ResponsiveContainer width="100%" height={220}>
                   <PieChart>
                     <Pie data={data.leavesByType} dataKey="days" nameKey="name" innerRadius={45} outerRadius={80} label={({ name, value }) => `${name} ${value}`}>

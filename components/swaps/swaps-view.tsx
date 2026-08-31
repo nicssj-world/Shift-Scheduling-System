@@ -7,6 +7,7 @@ import { HistoryControls } from '@/components/history-controls'
 import { api } from '@/lib/client-api'
 import { bangkokMonthNow, thaiMonthLabel, thaiShortDate } from '@/lib/dates'
 import { SWAP_STATUS_TH, type SwapStatus } from '@/lib/types'
+import { useAssignmentReservationRealtime } from '@/components/swaps/use-assignment-reservation-realtime'
 
 type SwapRow = {
   id: string
@@ -96,15 +97,28 @@ export function SwapsView() {
     setPage(1)
   }
 
-  async function loadCreateOptions(month: string) {
+  async function loadCreateOptions(month: string, preserveSelections = true) {
     setOptions(null)
     try {
-      setOptions(await api<{ mine: OptionShift[]; others: OtherShift[] }>(`/api/swaps/options?month=${month}`))
+      const next = await api<{ mine: OptionShift[]; others: OtherShift[] }>(`/api/swaps/options?month=${month}`)
+      const validMineIds = new Set(next.mine.map((shift) => shift.id))
+      const validOtherIds = new Set(next.others.map((shift) => shift.id))
+      const currentMyPick = preserveSelections ? myPick : ''
+      const currentTheirPick = preserveSelections ? theirPick : ''
+      const nextMyPick = validMineIds.has(currentMyPick) ? currentMyPick : ''
+      const nextTheirPick = nextMyPick && validOtherIds.has(currentTheirPick) ? currentTheirPick : ''
+      if (currentMyPick && !nextMyPick) setError('เวรของคุณมีคำขอแลก/ขายค้างอยู่ จึงถูกนำออกจากรายการแล้ว')
+      else if (currentTheirPick && !nextTheirPick) setError('เวรที่เลือกมีคำขอแลก/ขายค้างอยู่ จึงถูกนำออกจากรายการแล้ว')
+      setMyPick(nextMyPick)
+      setTheirPick(nextTheirPick)
+      setOptions(next)
     } catch (e) {
       setOptions({ mine: [], others: [] })
       setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
     }
   }
+
+  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth) })
 
   async function openCreate() {
     const month = fromMonth || toMonth || bangkokMonthNow()
@@ -117,7 +131,7 @@ export function SwapsView() {
     setTargetShiftCode('')
     setReason('')
     setError(null)
-    await loadCreateOptions(month)
+    await loadCreateOptions(month, false)
   }
 
   async function changeOptionMonth(month: string) {
@@ -128,7 +142,7 @@ export function SwapsView() {
     setTargetSearch('')
     setTargetDate('')
     setTargetShiftCode('')
-    await loadCreateOptions(month)
+    await loadCreateOptions(month, false)
   }
 
   async function submitCreate() {

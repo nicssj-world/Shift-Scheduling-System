@@ -56,6 +56,7 @@ export function ShiftTypesView() {
           startTime: (edit.start_time ?? '08:00').slice(0, 5),
           endTime: (edit.end_time ?? '16:00').slice(0, 5),
           hours: Number(edit.hours ?? 8),
+          triggersRestAfterNight: Boolean(edit.triggers_rest_after_night ?? edit.code?.toUpperCase() === 'N'),
           color: edit.color ?? '#0284c7',
           isActive: edit.is_active ?? true,
           sortOrder: Number(edit.sort_order ?? 0),
@@ -138,7 +139,7 @@ export function ShiftTypesView() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold">ประเภทเวรและอัตรากำลัง</h1>
-        <Button size="sm" onClick={() => setEdit({ code: '', name_th: '', start_time: '08:00', end_time: '16:00', hours: 8, color: '#0284c7', is_active: true, sort_order: types.length + 1 })}>
+        <Button size="sm" onClick={() => setEdit({ code: '', name_th: '', start_time: '08:00', end_time: '16:00', hours: 8, triggers_rest_after_night: false, color: '#0284c7', is_active: true, sort_order: types.length + 1 })}>
           <Plus size={14} /> เพิ่มประเภทเวร
         </Button>
       </div>
@@ -259,6 +260,14 @@ export function ShiftTypesView() {
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={edit.is_active ?? true} onChange={(e) => setEdit({ ...edit, is_active: e.target.checked })} />
               เปิดใช้งาน
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={edit.triggers_rest_after_night ?? edit.code?.toUpperCase() === 'N'}
+                onChange={(e) => setEdit({ ...edit, triggers_rest_after_night: e.target.checked })}
+              />
+              เวรนี้กระตุ้นเวลาพักก่อน OT ถัดไป
             </label>
             <Button disabled={busy || !edit.code || !edit.name_th} onClick={saveType}>บันทึก</Button>
           </div>

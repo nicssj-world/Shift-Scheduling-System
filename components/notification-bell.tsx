@@ -24,7 +24,7 @@ export function NotificationBell({ userId }: { userId: string }) {
   }, [])
 
   useEffect(() => {
-    load()
+    const loadTimer = window.setTimeout(() => { void load() }, 250)
     const supabase = createClient()
     const channel = supabase
       .channel(`shift-notif-${userId}`)
@@ -38,6 +38,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       )
       .subscribe()
     return () => {
+      window.clearTimeout(loadTimer)
       supabase.removeChannel(channel)
     }
   }, [userId, load])

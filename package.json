@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "import:attendance": "node scripts/import-attendance-register.mjs"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",

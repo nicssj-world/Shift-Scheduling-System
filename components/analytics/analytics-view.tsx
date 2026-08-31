@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Info, Sparkles, TrendingUp } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { Card, EmptyState, ErrorNote, Spinner } from '@/components/ui'
+import { Card, EmptyState, ErrorNote } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import { thaiMonthLabel } from '@/lib/dates'
 
@@ -26,11 +26,24 @@ export function AnalyticsView() {
       .catch((e) => setError(e instanceof Error ? e.message : 'โหลดไม่สำเร็จ'))
   }, [])
 
-  if (!data && !error) return <Spinner />
+  const isLoading = !data && !error
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" aria-busy={isLoading}>
       <h1 className="flex items-center gap-2 text-lg font-bold"><Sparkles size={20} className="text-brand-600" /> วิเคราะห์กำลังคนและภาระงาน</h1>
+      {isLoading && (
+        <div className="flex flex-col gap-4" aria-label="กำลังโหลดข้อมูลวิเคราะห์">
+          <Card>
+            <div className="h-4 w-2/5 animate-pulse rounded bg-slate-100" />
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+              <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+              <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+            </div>
+          </Card>
+          <Card><div className="h-56 animate-pulse rounded-xl bg-slate-100" /></Card>
+        </div>
+      )}
       <ErrorNote error={error} />
       {data && (
         <>
@@ -81,7 +94,7 @@ export function AnalyticsView() {
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line type="monotone" dataKey="required" name="ที่ต้องการ" stroke="#94a3b8" strokeDasharray="5 3" />
                 <Line type="monotone" dataKey="filled" name="จัดได้" stroke="#0284c7" strokeWidth={2} />
-                <Line type="monotone" dataKey="leaves" name="ใบลา" stroke="#f59e0b" />
+                <Line type="monotone" dataKey="leaves" name="รายการทะเบียน" stroke="#f59e0b" />
               </LineChart>
             </ResponsiveContainer>
           </Card>
