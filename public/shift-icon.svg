@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>CBH Shift Scheduler</title>
+  <rect width="512" height="512" rx="112" fill="#2563eb"/>
+  <rect x="116" y="128" width="280" height="246" rx="34" fill="none" stroke="#fff" stroke-width="26"/>
+  <path d="M116 210h280M180 96v76M332 96v76" fill="none" stroke="#fff" stroke-width="26" stroke-linecap="round"/>
+  <circle cx="318" cy="322" r="76" fill="#2563eb" stroke="#fff" stroke-width="22"/>
+  <path d="M318 282v43l31 19" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
