@@ -30,6 +30,8 @@ const STRUCTURAL_RULES = new Set([
   'invalid_job', 'duplicate_assignment', 'job_coverage', 'overstaffed',
 ])
 
+const SAFETY_RULES = new Set(['minimum_rest_between_ot', 'consecutive_night'])
+
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return respond(async () => {
     const actor = await requireScheduler()
@@ -194,12 +196,20 @@ async function assertProposedRosterAllowed(
   const afterViolations = validateAssignments(validationContext, proposed)
   const beforeViolations = validateAssignments(validationContext, before)
   const structural = afterViolations.filter((violation) => violation.severity === 'error' && STRUCTURAL_RULES.has(violation.rule))
+  const afterSafety = afterViolations.filter((violation) => violation.severity === 'error' && SAFETY_RULES.has(violation.rule))
   // Drafts must never persist a newly malformed assignment. A published
   // roster may already contain a legacy violation; for that state we compare
   // before/after below and reject only a newly introduced or worsened hard
   // error, as required for safe emergency edits.
   if (ctx.schedule.status !== 'published') {
     if (structural.length > 0) throw new HttpError(409, `แก้ไขไม่ได้: ${structural[0].message}`)
+    const beforeSafetyKeys = new Set(
+      beforeViolations
+        .filter((violation) => violation.severity === 'error' && SAFETY_RULES.has(violation.rule))
+        .map(violationKey),
+    )
+    const newlyIntroducedSafety = afterSafety.find((violation) => !beforeSafetyKeys.has(violationKey(violation)))
+    if (newlyIntroducedSafety) throw new HttpError(409, `แก้ไขไม่ได้: ${newlyIntroducedSafety.message}`)
     return
   }
 

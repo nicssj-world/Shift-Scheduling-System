@@ -47,7 +47,16 @@ export async function getSetting<T>(key: string, fallback: T): Promise<T> {
 
 export async function getSchedulerConfig(): Promise<SchedulerConfig> {
   const config = await getSetting<SchedulerConfig>('scheduler', DEFAULT_CONFIG)
-  return { ...DEFAULT_CONFIG, ...config, weights: { ...DEFAULT_CONFIG.weights, ...config.weights } }
+  return {
+    ...DEFAULT_CONFIG,
+    ...config,
+    // Existing installations may still have the old 8-hour value stored under
+    // this legacy key. The 16-hour recovery rule is now the hard floor.
+    minRestHoursAfterNight: Math.max(16, Number.isFinite(Number(config.minRestHoursAfterNight))
+      ? Number(config.minRestHoursAfterNight)
+      : 16),
+    weights: { ...DEFAULT_CONFIG.weights, ...config.weights },
+  }
 }
 
 export async function getSwapSettings() {

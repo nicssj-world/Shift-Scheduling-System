@@ -40,8 +40,9 @@ describe('validateAssignments', () => {
     expect(violations.some((v) => v.rule === 'max_consecutive_hours')).toBe(true)
   })
 
-  it('flags doubles when the toggle is off but allows them when on', () => {
-    // Weekend A→N has no implicit regular 08:00–16:00 work between it.
+  it('enforces 16-hour OT rest even when the legacy double toggle is on', () => {
+    // Weekend A→N has no implicit regular 08:00–16:00 work between it, but
+    // the two OT shifts still have zero recovery hours.
     const double = [a('2026-08-08', 'A', 'u01'), a('2026-08-09', 'N', 'u01')]
     const strict = validateAssignments(
       ctx({ config: { ...DEFAULT_CONFIG, allowAfternoonNightDouble: false, requireWeeklyDayOff: false } }),
@@ -53,7 +54,7 @@ describe('validateAssignments', () => {
       ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false } }),
       double,
     )
-    expect(lenient.filter((v) => v.severity === 'error')).toEqual([])
+    expect(lenient.some((v) => v.rule === 'minimum_rest_between_ot')).toBe(true)
   })
 
   it('always blocks a Sunday A-to-Monday N double because Monday regular work makes 24 hours', () => {
@@ -90,23 +91,23 @@ describe('validateAssignments', () => {
     expect(over16.some((v) => v.rule === 'max_consecutive_hours')).toBe(true)
   })
 
-  it('flags insufficient rest after a night shift', () => {
+  it('flags insufficient rest between any two OT shifts', () => {
     const violations = validateAssignments(
       ctx({ config: { ...DEFAULT_CONFIG, minRestHoursAfterNight: 12 } }),
-      [a('2026-08-03', 'N', 'u01'), a('2026-08-03', 'A', 'u01')], // 8h gap < 12h required
+      [a('2026-08-03', 'N', 'u01'), a('2026-08-03', 'A', 'u01')], // 8h gap < the global 16h minimum
     )
-    expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(true)
+    expect(violations.some((v) => v.rule === 'minimum_rest_between_ot')).toBe(true)
   })
 
-  it('does not apply post-night OT rest to implicit regular work', () => {
+  it('does not apply the OT rest rule to implicit regular work', () => {
     const violations = validateAssignments(
       ctx({ config: { ...DEFAULT_CONFIG, minRestHoursAfterNight: 12 } }),
       [a('2026-08-03', 'N', 'u01')],
     )
-    expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(false)
+    expect(violations.some((v) => v.rule === 'minimum_rest_between_ot')).toBe(false)
   })
 
-  it('honors an explicit non-night flag even for a midnight-start shift', () => {
+  it('applies the OT rest rule even when a midnight-start shift is not marked as night', () => {
     const slots = makeSlots(0).map((slot) => slot.code === 'N'
       ? { ...slot, triggersRestAfterNight: false }
       : slot)
@@ -114,7 +115,52 @@ describe('validateAssignments', () => {
       ctx({ slots, config: { ...DEFAULT_CONFIG, minRestHoursAfterNight: 12, requireWeeklyDayOff: false } }),
       [a('2026-08-03', 'N', 'u01'), a('2026-08-03', 'A', 'u01')],
     )
-    expect(violations.some((v) => v.rule === 'rest_after_night')).toBe(false)
+    expect(violations.some((v) => v.rule === 'minimum_rest_between_ot')).toBe(true)
+  })
+
+  it('flags consecutive night shifts even though they have exactly 16 hours between them', () => {
+    const violations = validateAssignments(
+      ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false } }),
+      [a('2026-08-03', 'N', 'u01'), a('2026-08-04', 'N', 'u01')],
+    )
+    expect(violations.some((v) => v.rule === 'consecutive_night')).toBe(true)
+  })
+
+  it('warns when holiday duty is concentrated on one person', () => {
+    const violations = validateAssignments(ctx({
+      days: [
+        { date: '2026-10-13', dayClass: 'holiday' },
+        { date: '2026-10-23', dayClass: 'holiday' },
+      ],
+      members: [{ userId: 'u01' }, { userId: 'u02' }],
+      exactCoverage: false,
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false },
+    }), [
+      a('2026-10-13', 'A', 'u01'),
+      a('2026-10-23', 'A', 'u01'),
+    ])
+    expect(violations.some((v) => v.rule === 'holiday_imbalance' && v.severity === 'warning')).toBe(true)
+  })
+
+  it('warns when one shift type is concentrated on one person', () => {
+    const slot = {
+      ...makeSlots(0).find((item) => item.code === 'A')!,
+      requiredByDayClass: { weekday: 1, weekend: 0, holiday: 0 } as const,
+    }
+    const violations = validateAssignments(ctx({
+      days: [
+        { date: '2026-08-03', dayClass: 'weekday' },
+        { date: '2026-08-04', dayClass: 'weekday' },
+      ],
+      slots: [slot],
+      members: [{ userId: 'u01' }, { userId: 'u02' }],
+      exactCoverage: false,
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false },
+    }), [
+      a('2026-08-03', 'A', 'u01'),
+      a('2026-08-04', 'A', 'u01'),
+    ])
+    expect(violations.some((v) => v.rule === 'type_imbalance' && v.shiftTypeCode === 'A' && v.severity === 'warning')).toBe(true)
   })
 
   it('flags exceeding max shifts per month', () => {
@@ -244,11 +290,21 @@ describe('validateAssignments', () => {
     expect(violations.some((violation) => violation.rule === 'weekly_day_off')).toBe(false)
   })
 
-  it('warns when a trailing boundary week cannot yet be proven', () => {
+  it('does not warn when a trailing boundary week cannot yet be proven', () => {
     const violations = validateAssignments(ctx({ config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: true } }), [
       a('2026-08-03', 'A', 'u01'),
     ])
-    expect(violations.some((violation) => violation.rule === 'weekly_day_off_pending' && violation.severity === 'warning')).toBe(true)
+    expect(violations.some((violation) => violation.rule === 'weekly_day_off_pending')).toBe(false)
+  })
+
+  it('does not require a future roster for active team members', () => {
+    const violations = validateAssignments(ctx({
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: true },
+      members: [{ userId: 'u01' }, { userId: 'u02' }, { userId: 'u03' }],
+    }), [])
+    const pending = violations.filter((violation) => violation.rule === 'weekly_day_off_pending')
+
+    expect(pending).toEqual([])
   })
 
   it('hard-checks a trailing boundary week once the next roster is known', () => {

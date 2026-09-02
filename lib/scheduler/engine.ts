@@ -53,8 +53,8 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
     for (let i = 0; i < 7; i++) {
       const d = addDays(monday, i)
       // Include known prior-month boundary dates so the first partial ISO
-      // week of a month is checked continuously. Future-month dates are not
-      // known yet and remain pending in the validator.
+      // week of a month is checked continuously. Unknown future-month dates
+      // remain outside the enforceable weekly-rest window for now.
       if (knownDates.has(d)) week.push(d)
     }
     weekDatesByDate.set(day.date, week)
@@ -112,7 +112,15 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
     stats[member.userId] = personStats
   }
 
-  const orderedSlots = [...input.slots].sort((a, b) => a.startMin - b.startMin || a.code.localeCompare(b.code))
+  // Schedule the scarcest shift type first. This is important when one type
+  // only exists on weekends/holidays: assigning the daily types first can
+  // consume exactly the people who still need that scarce type, producing a
+  // false 0-versus-2 distribution even though the month is feasible.
+  const orderedSlots = [...input.slots].sort((a, b) =>
+    slotDemand(a, days) - slotDemand(b, days)
+    || a.code.localeCompare(b.code)
+    || a.startMin - b.startMin,
+  )
   const pairCounts: PairCounts = Object.fromEntries(
     Object.entries(input.carryIn.pairCounts).map(([userId, counts]) => [userId, { ...counts }]),
   )
@@ -141,7 +149,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
               config.weights,
               input.carryIn.totalCounts[member.userId] ?? 0,
             ),
-            typeCount: personStats.byType[slot.code] ?? 0,
+            typeCount: personStats.currentByType[slot.code] ?? 0,
           }
         })
 
@@ -157,14 +165,32 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
           // A monthly roster must stay balanced in its own right. Historical
           // totals can decide who gets an otherwise-tied extra shift, but
           // must not cause this month's workload to drift apart.
-          const currentMonthDifference = stats[a.member.userId].total - stats[b.member.userId].total
-          const weekendHolidayDifference = day.dayClass === 'weekday'
-            ? 0
-            : stats[a.member.userId].weekendHoliday - stats[b.member.userId].weekendHoliday
+          const currentTypeDifference = (stats[a.member.userId].currentByType[slot.code] ?? 0)
+            - (stats[b.member.userId].currentByType[slot.code] ?? 0)
+          const historicalTypeDifference = (stats[a.member.userId].byType[slot.code] ?? 0)
+            - (stats[b.member.userId].byType[slot.code] ?? 0)
+          const holidayDifference = day.dayClass === 'holiday'
+            ? stats[a.member.userId].holiday - stats[b.member.userId].holiday
+            : 0
+          const weekendHolidayDifference = day.dayClass === 'weekend'
+            ? stats[a.member.userId].weekendHoliday - stats[b.member.userId].weekendHoliday
+            : 0
           const aTotal = a.baseScore + pairingPenalty(a.member.userId, chosenIds, pairCounts, config.weights.pairing)
           const bTotal = b.baseScore + pairingPenalty(b.member.userId, chosenIds, pairCounts, config.weights.pairing)
+          const totalDifference = stats[a.member.userId].total - stats[b.member.userId].total
           return (
-            currentMonthDifference ||
+            // Keep the monthly total inside a one-shift band. Type fairness
+            // is applied inside that band so a low count for one type cannot
+            // make somebody receive a third extra shift overall while another
+            // eligible person is still two shifts behind.
+            (Math.abs(totalDifference) > 1 ? totalDifference : 0) ||
+            // On a holiday, first avoid assigning the next holiday to someone
+            // who already has more holiday duty. This prevents a type-level
+            // tie-break from recreating the same holiday imbalance.
+            holidayDifference ||
+            currentTypeDifference ||
+            historicalTypeDifference ||
+            totalDifference ||
             weekendHolidayDifference ||
             aTotal - bTotal ||
             a.typeCount - b.typeCount ||
@@ -200,7 +226,9 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
         const personStats = stats[member.userId]
         personStats.total += 1
         personStats.byType[slot.code] = (personStats.byType[slot.code] ?? 0) + 1
+        personStats.currentByType[slot.code] = (personStats.currentByType[slot.code] ?? 0) + 1
         if (day.dayClass !== 'weekday') personStats.weekendHoliday += 1
+        if (day.dayClass === 'holiday') personStats.holiday += 1
 
         assignments.push({
           date: day.date,
@@ -257,6 +285,43 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
     }
   }
 
+  // soft warning: public-holiday workload spread. The generator prioritizes
+  // this burden before total workload, but leave and capacity can still make
+  // a perfectly even split impossible.
+  const holidayDays = days.filter((day) => day.dayClass === 'holiday')
+  const holidayCounts = staff.map((member) => stats[member.userId].holiday)
+  if (holidayDays.length > 0 && holidayCounts.length > 0) {
+    const spread = Math.max(...holidayCounts) - Math.min(...holidayCounts)
+    if (spread > 1) {
+      violations.push({
+        date: holidayDays[0].date,
+        rule: 'holiday_imbalance',
+        severity: 'warning',
+        message: `ภาระเวรวันหยุดต่างกัน ${spread} เวร (มากที่สุด ${Math.max(...holidayCounts)} / น้อยที่สุด ${Math.min(...holidayCounts)})`,
+      })
+    }
+  }
+
+  // soft warning: each shift type must also be balanced independently. The
+  // current-month type count is intentionally separate from rolling history,
+  // so the extra slot rotates to people who had fewer of that type before.
+  for (const slot of input.slots) {
+    if (!days.some((day) => (slot.requiredByDayClass[day.dayClass] ?? 0) > 0)) continue
+    const typeCounts = staff.map((member) => stats[member.userId].currentByType[slot.code] ?? 0)
+    if (typeCounts.length === 0) continue
+    const max = Math.max(...typeCounts)
+    const min = Math.min(...typeCounts)
+    if (max - min > 1) {
+      violations.push({
+        date: days[0]?.date ?? '',
+        shiftTypeCode: slot.code,
+        rule: 'type_imbalance',
+        severity: 'warning',
+        message: `เวร ${slot.code} กระจายต่างกัน ${max - min} เวร (มากที่สุด ${max} / น้อยที่สุด ${min})`,
+      })
+    }
+  }
+
   return { assignments, violations, stats }
 }
 
@@ -305,7 +370,9 @@ function repairUnderstaffed(
   const slotById = new Map(input.slots.map((slot) => [slot.shiftTypeId, slot]))
   const slotByCode = new Map(input.slots.map((slot) => [slot.code, slot]))
   const orderedGroups = input.days.flatMap((day) => [...input.slots]
-    .sort((a, b) => a.startMin - b.startMin || a.code.localeCompare(b.code))
+    .sort((a, b) => slotDemand(a, input.days) - slotDemand(b, input.days)
+      || a.code.localeCompare(b.code)
+      || a.startMin - b.startMin)
     .map((slot) => ({ day, slot })))
 
   for (const { day, slot } of orderedGroups) {
@@ -322,7 +389,21 @@ function repairUnderstaffed(
         .sort((a, b) => {
           const aStats = stats[a.userId]
           const bStats = stats[b.userId]
-          return (aStats.total - bStats.total)
+          const currentTypeDifference = (aStats.currentByType[slot.code] ?? 0) - (bStats.currentByType[slot.code] ?? 0)
+          const historicalTypeDifference = (aStats.byType[slot.code] ?? 0) - (bStats.byType[slot.code] ?? 0)
+          const holidayDifference = day.dayClass === 'holiday'
+            ? aStats.holiday - bStats.holiday
+            : 0
+          const weekendHolidayDifference = day.dayClass === 'weekend'
+            ? aStats.weekendHoliday - bStats.weekendHoliday
+            : 0
+          const totalDifference = aStats.total - bStats.total
+          return (Math.abs(totalDifference) > 1 ? totalDifference : 0)
+            || holidayDifference
+            || currentTypeDifference
+            || historicalTypeDifference
+            || totalDifference
+            || weekendHolidayDifference
             || (fairnessScore(aStats, slot.code, day.dayClass, consecutiveWorkDaysBefore(states.get(a.userId)!.workDates, day.date), input.config.weights, input.carryIn.totalCounts[a.userId] ?? 0)
               - fairnessScore(bStats, slot.code, day.dayClass, consecutiveWorkDaysBefore(states.get(b.userId)!.workDates, day.date), input.config.weights, input.carryIn.totalCounts[b.userId] ?? 0))
             || tieBreakHash(`${day.date}|${slot.code}|${a.key}`) - tieBreakHash(`${day.date}|${slot.code}|${b.key}`)
@@ -606,6 +687,10 @@ function repairJobId(assignments: AssignmentDraft[], date: string, shiftTypeId: 
   return input.jobs.find((job) => !used.has(job.id))?.id ?? null
 }
 
+function slotDemand(slot: SchedulerInput['slots'][number], days: SchedulerInput['days']) {
+  return days.reduce((total, day) => total + (slot.requiredByDayClass[day.dayClass] ?? 0), 0)
+}
+
 function incrementStats(
   stats: PersonStats,
   assignment: AssignmentDraft,
@@ -614,7 +699,9 @@ function incrementStats(
 ) {
   stats.total += 1
   stats.byType[assignment.code] = (stats.byType[assignment.code] ?? 0) + 1
+  stats.currentByType[assignment.code] = (stats.currentByType[assignment.code] ?? 0) + 1
   if (dayClass !== 'weekday') stats.weekendHoliday += 1
+  if (dayClass === 'holiday') stats.holiday += 1
   if (assignment.jobId) {
     const job = input.jobs.find((candidate) => candidate.id === assignment.jobId)
     if (job) stats.byJob[job.code] = (stats.byJob[job.code] ?? 0) + 1
@@ -629,7 +716,9 @@ function decrementStats(
 ) {
   stats.total = Math.max(0, stats.total - 1)
   stats.byType[assignment.code] = Math.max(0, (stats.byType[assignment.code] ?? 0) - 1)
+  stats.currentByType[assignment.code] = Math.max(0, (stats.currentByType[assignment.code] ?? 0) - 1)
   if (dayClass !== 'weekday') stats.weekendHoliday = Math.max(0, stats.weekendHoliday - 1)
+  if (dayClass === 'holiday') stats.holiday = Math.max(0, stats.holiday - 1)
   if (assignment.jobId) {
     const job = input.jobs.find((candidate) => candidate.id === assignment.jobId)
     if (job) stats.byJob[job.code] = Math.max(0, (stats.byJob[job.code] ?? 0) - 1)

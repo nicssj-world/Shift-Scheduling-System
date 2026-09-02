@@ -6,7 +6,8 @@ export type OwnedAssignmentDraft = AssignmentDraft & { id: string }
 /**
  * Return hard-rule violations introduced by changing assignment owners.
  * Existing unrelated violations do not block a swap/sale, but a transfer may
- * not add leave, overlap, rest, >16-hour, max-shift, or weekly-day-off errors.
+ * not add leave, overlap, consecutive-night, rest, >16-hour, max-shift, or
+ * weekly-day-off errors.
  */
 export function newOwnerChangeViolations(
   ctx: ValidateContext,

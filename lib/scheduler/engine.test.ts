@@ -83,6 +83,29 @@ describe('generateSchedule', () => {
     expect(result.violations.filter((v) => v.rule === 'understaffed')).toEqual([])
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1)
     expect(Math.max(...weekendHolidayTotals) - Math.min(...weekendHolidayTotals)).toBeLessThanOrEqual(1)
+    for (const slot of slots) {
+      const typeCounts = staff.map((member) => result.stats[member.userId].currentByType[slot.code] ?? 0)
+      expect(Math.max(...typeCounts) - Math.min(...typeCounts)).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('keeps avoidable repeat holiday assignments off the roster', () => {
+    const holidayDates = new Set(['2026-10-13', '2026-10-23'])
+    const input = baseInput({
+      days: makeDays('2026-10', [...holidayDates]),
+      slots: makeSlots(4),
+      staff: makeStaff(31),
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false },
+    })
+    const result = generateSchedule(input)
+    const holidayCounts = input.staff.map((member) => result.assignments
+      .filter((assignment) => assignment.userId === member.userId && holidayDates.has(assignment.date)).length)
+
+    expect(Math.max(...holidayCounts)).toBeLessThanOrEqual(1)
+    for (const slot of makeSlots(4)) {
+      const typeCounts = input.staff.map((member) => result.stats[member.userId].currentByType[slot.code] ?? 0)
+      expect(Math.max(...typeCounts) - Math.min(...typeCounts), `${slot.code}: ${typeCounts.join(',')}`).toBeLessThanOrEqual(1)
+    }
   })
 
   it('respects approved leave', () => {
@@ -172,6 +195,38 @@ describe('generateSchedule', () => {
     const u01Total = result.stats['u01'].total
     const othersMin = Math.min(...staff.filter((s) => s.userId !== 'u01').map((s) => result.stats[s.userId].total))
     expect(u01Total).toBeLessThanOrEqual(othersMin)
+  })
+
+  it('rotates a type-specific extra shift away from last months higher count', () => {
+    const staff = makeStaff(4)
+    const slot = {
+      shiftTypeId: 'st-a', code: 'A', startMin: 960, endMin: 1440, hours: 8,
+      requiredByDayClass: { weekday: 1, weekend: 0, holiday: 0 } as const,
+    }
+    const days = makeDays('2026-08').filter((day) => day.dayClass === 'weekday').slice(0, 5)
+    const input = baseInput({
+      days,
+      slots: [slot],
+      staff,
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false },
+      carryIn: {
+        ...EMPTY_CARRY_IN,
+        shiftTypeCounts: {
+          u01: { A: 2 },
+          u02: { A: 0 },
+          u03: { A: 0 },
+          u04: { A: 0 },
+        },
+      },
+    })
+    const result = generateSchedule(input)
+
+    // Five positions among four people create one current-month extra. The
+    // person who carried two A shifts from the rolling history should not get
+    // that extra again; it rotates among the people with fewer A shifts.
+    expect(result.stats.u01.currentByType.A).toBe(1)
+    expect(Math.max(...staff.filter((member) => member.userId !== 'u01')
+      .map((member) => result.stats[member.userId].currentByType.A ?? 0))).toBe(2)
   })
 
   it('rotates the four jobs evenly', () => {

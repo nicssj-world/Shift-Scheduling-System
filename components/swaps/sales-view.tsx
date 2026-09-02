@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Coins, Plus } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
@@ -66,6 +66,7 @@ export function SalesView() {
   const [buyerId, setBuyerId] = useState('')
   const [reason, setReason] = useState('')
   const [confirmBox, setConfirmBox] = useState<{ message: string; run: () => void } | null>(null)
+  const optionsRequestRef = useRef(0)
 
   const [fromMonth, setFromMonth] = useState(bangkokMonthNow())
   const [toMonth, setToMonth] = useState(bangkokMonthNow())
@@ -102,10 +103,12 @@ export function SalesView() {
     setPage(1)
   }
 
-  async function loadCreateOptions(month: string, preserveSelections = true) {
-    setOptions(null)
+  async function loadCreateOptions(month: string, preserveSelections = true, silent = false) {
+    const requestId = ++optionsRequestRef.current
+    if (!silent) setOptions(null)
     try {
       const next = await api<{ mine: OptionShift[]; members: Member[] }>(`/api/sales/options?month=${month}`)
+      if (requestId !== optionsRequestRef.current) return
       const selectableIds = new Set(next.mine.filter((shift) => shift.selectable).map((shift) => shift.id))
       const currentPicked = preserveSelections ? picked : new Set<string>()
       const nextPicked = new Set([...currentPicked].filter((id) => selectableIds.has(id)))
@@ -116,12 +119,13 @@ export function SalesView() {
       if (nextPicked.size === 0) setBuyerId('')
       setOptions(next)
     } catch (e) {
+      if (requestId !== optionsRequestRef.current || silent) return
       setOptions({ mine: [], members: [] })
       setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
     }
   }
 
-  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth) })
+  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth, true, true) })
 
   async function openCreate() {
     const month = fromMonth || toMonth || bangkokMonthNow()

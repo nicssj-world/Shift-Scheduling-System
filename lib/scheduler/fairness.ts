@@ -2,7 +2,7 @@ import type { PersonStats, SchedulerWeights } from '@/lib/scheduler/types'
 import type { DayClass } from '@/lib/types'
 
 export function emptyStats(): PersonStats {
-  return { total: 0, byType: {}, weekendHoliday: 0, byJob: {} }
+  return { total: 0, byType: {}, currentByType: {}, weekendHoliday: 0, holiday: 0, byJob: {} }
 }
 
 /**
@@ -24,7 +24,11 @@ export function fairnessScore(
   return (
     weights.total * (stats.total + carryTotal) +
     weights.type * (stats.byType[code] ?? 0) +
-    (dayClass !== 'weekday' ? weights.weekend * stats.weekendHoliday : 0) +
+    (dayClass === 'holiday'
+      ? weights.weekend * stats.holiday
+      : dayClass === 'weekend'
+        ? weights.weekend * stats.weekendHoliday
+        : 0) +
     weights.consecutive * consecutiveBefore
   )
 }

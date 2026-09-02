@@ -8,7 +8,7 @@ export type SlotDef = {
   /** may be 1440 for a shift ending at 24:00 */
   endMin: number
   hours: number
-  /** Explicitly marks a shift after which the configurable OT rest applies. */
+  /** Marks a night shift so consecutive nights can be prohibited consistently. */
   triggersRestAfterNight?: boolean
   requiredByDayClass: Record<DayClass, number>
 }
@@ -28,6 +28,8 @@ export type SchedulerWeights = {
 export type SchedulerConfig = {
   maxShiftsPerMonth: number
   allowAfternoonNightDouble: boolean
+  /** Kept as the persisted setting name for compatibility; the value is the
+   * minimum rest required between OT shifts and is never allowed below 16h. */
   minRestHoursAfterNight: number
   requireWeeklyDayOff: boolean
   weights: SchedulerWeights
@@ -36,7 +38,7 @@ export type SchedulerConfig = {
 export const DEFAULT_CONFIG: SchedulerConfig = {
   maxShiftsPerMonth: 24,
   allowAfternoonNightDouble: true,
-  minRestHoursAfterNight: 8,
+  minRestHoursAfterNight: 16,
   requireWeeklyDayOff: true,
   weights: { total: 10, type: 4, weekend: 6, consecutive: 3, pairing: 4 },
 }
@@ -114,7 +116,11 @@ export type Violation = {
 export type PersonStats = {
   total: number
   byType: Record<string, number>
+  /** Current-month counts by shift type; kept separate from rolling history. */
+  currentByType: Record<string, number>
   weekendHoliday: number
+  /** Current-run public-holiday assignments; used before total workload. */
+  holiday: number
   byJob: Record<string, number>
 }
 

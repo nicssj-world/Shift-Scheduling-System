@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeftRight, Check, Plus, Search } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
@@ -61,6 +61,7 @@ export function SwapsView() {
   const [targetShiftCode, setTargetShiftCode] = useState('')
   const [reason, setReason] = useState('')
   const [confirmBox, setConfirmBox] = useState<{ message: string; run: () => void } | null>(null)
+  const optionsRequestRef = useRef(0)
 
   const [fromMonth, setFromMonth] = useState(bangkokMonthNow())
   const [toMonth, setToMonth] = useState(bangkokMonthNow())
@@ -97,10 +98,12 @@ export function SwapsView() {
     setPage(1)
   }
 
-  async function loadCreateOptions(month: string, preserveSelections = true) {
-    setOptions(null)
+  async function loadCreateOptions(month: string, preserveSelections = true, silent = false) {
+    const requestId = ++optionsRequestRef.current
+    if (!silent) setOptions(null)
     try {
       const next = await api<{ mine: OptionShift[]; others: OtherShift[] }>(`/api/swaps/options?month=${month}`)
+      if (requestId !== optionsRequestRef.current) return
       const validMineIds = new Set(next.mine.map((shift) => shift.id))
       const validOtherIds = new Set(next.others.map((shift) => shift.id))
       const currentMyPick = preserveSelections ? myPick : ''
@@ -113,12 +116,13 @@ export function SwapsView() {
       setTheirPick(nextTheirPick)
       setOptions(next)
     } catch (e) {
+      if (requestId !== optionsRequestRef.current || silent) return
       setOptions({ mine: [], others: [] })
       setError(e instanceof Error ? e.message : 'โหลดตัวเลือกไม่สำเร็จ')
     }
   }
 
-  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth) })
+  useAssignmentReservationRealtime(createOpen, () => { void loadCreateOptions(optionMonth, true, true) })
 
   async function openCreate() {
     const month = fromMonth || toMonth || bangkokMonthNow()

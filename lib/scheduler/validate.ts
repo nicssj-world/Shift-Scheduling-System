@@ -1,5 +1,7 @@
 import { addDays, mondayOfWeek } from '@/lib/dates'
-import { addRegularWork, toInterval, type Interval, type PersonState } from '@/lib/scheduler/constraints'
+import {
+  addRegularWork, minimumRestHoursBetweenOt, toInterval, type Interval, type PersonState,
+} from '@/lib/scheduler/constraints'
 import type { AssignmentDraft, CarryIn, DayInfo, JobIn, SchedulerConfig, SlotDef, Violation } from '@/lib/scheduler/types'
 
 export type ValidateShiftType = {
@@ -216,6 +218,58 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
     }
   }
 
+  // Fairness is a soft rule: leave, availability, or capacity can make a
+  // perfectly even holiday split impossible. Still surface a schedule-level
+  // warning when the avoidable spread is greater than one assignment.
+  const holidayCounts = new Map<string, number>()
+  for (const { assignment } of validAssignments) {
+    if (dayByDate.get(String(assignment.date))?.dayClass !== 'holiday') continue
+    const userId = String(assignment.userId)
+    holidayCounts.set(userId, (holidayCounts.get(userId) ?? 0) + 1)
+  }
+  const holidayUsers = ctx.members
+    ? ctx.members.filter((member) => member.isActive !== false).map((member) => member.userId)
+    : [...new Set(validAssignments.map(({ assignment }) => String(assignment.userId)))]
+  if (holidayUsers.length > 0 && holidayCounts.size > 0) {
+    const counts = holidayUsers.map((userId) => holidayCounts.get(userId) ?? 0)
+    const max = Math.max(...counts)
+    const min = Math.min(...counts)
+    if (max - min > 1) {
+      violations.push({
+        date: ctx.days.find((day) => day.dayClass === 'holiday')?.date ?? '',
+        rule: 'holiday_imbalance',
+        severity: 'warning',
+        message: `ภาระเวรวันหยุดต่างกัน ${max - min} เวร (มากที่สุด ${max} / น้อยที่สุด ${min})`,
+      })
+    }
+  }
+
+  // Each shift type is a separate fairness dimension. A person receiving
+  // extra M/A/N assignments must not be hidden by an even overall total.
+  const typeCounts = new Map<string, Map<string, number>>()
+  for (const { assignment, slot } of validAssignments) {
+    const userCounts = typeCounts.get(slot.code) ?? new Map<string, number>()
+    const userId = String(assignment.userId)
+    userCounts.set(userId, (userCounts.get(userId) ?? 0) + 1)
+    typeCounts.set(slot.code, userCounts)
+  }
+  for (const slot of ctx.slots) {
+    if (!ctx.days.some((day) => (slot.requiredByDayClass[day.dayClass] ?? 0) > 0)) continue
+    const counts = holidayUsers.map((userId) => typeCounts.get(slot.code)?.get(userId) ?? 0)
+    if (counts.length === 0) continue
+    const max = Math.max(...counts)
+    const min = Math.min(...counts)
+    if (max - min > 1) {
+      violations.push({
+        date: ctx.days[0]?.date ?? '',
+        shiftTypeCode: slot.code,
+        rule: 'type_imbalance',
+        severity: 'warning',
+        message: `เวร ${slot.code} กระจายต่างกัน ${max - min} เวร (มากที่สุด ${max} / น้อยที่สุด ${min})`,
+      })
+    }
+  }
+
   // --- distinct Job coverage ---
   if (usesJobs) {
     const jobs = ctx.jobs ?? []
@@ -344,6 +398,24 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
       }
     }
 
+    // Consecutive night shifts are prohibited even when the configured rest
+    // window would technically allow the 16-hour gap between them.
+    const nightDates = new Set(intervals.filter((interval) => interval.isNight).map((interval) => interval.date))
+    for (const nightDate of nightDates) {
+      const followingDate = addDays(nightDate, 1)
+      if (!nightDates.has(followingDate)) continue
+      if (!daySet.has(nightDate) && !daySet.has(followingDate)) continue
+      violations.push({
+        date: daySet.has(followingDate) ? followingDate : nightDate,
+        userId,
+        shiftTypeCode: intervals.find((interval) => interval.date === followingDate)?.code
+          ?? intervals.find((interval) => interval.date === nightDate)?.code,
+        rule: 'consecutive_night',
+        severity: 'error',
+        message: `${nightDate} และ ${followingDate}: ห้ามจัดเวรดึกติดต่อกันสองวัน`,
+      })
+    }
+
     // contiguous runs (doubles / >16h)
     let runStart = 0
     while (runStart < intervals.length) {
@@ -372,22 +444,28 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
       runStart = runEnd + 1
     }
 
-    // Rest after a night-triggering shift applies to later OT only. Implicit
-    // regular work is deliberately exempt, while still counting in 16-hour
-    // continuity checks above.
-    for (const night of intervals) {
-      if (!night.isNight) continue
-      for (const other of intervals) {
-        if (other === night || other.isRegularWork || other.startAbs < night.endAbs) continue
-        const gap = other.startAbs - night.endAbs
-        const touchesScheduledMonth = daySet.has(night.date) || daySet.has(other.date)
-        if (touchesScheduledMonth && gap < ctx.config.minRestHoursAfterNight * 60) {
+    // Every pair of OT shifts needs at least the global minimum recovery time.
+    // Implicit weekday 08:00–16:00 work is deliberately exempt because it is
+    // the employee's ordinary shift, while still counting in the 16-hour
+    // continuous-hours check above. Keep this in sync with checkAssignment so
+    // generated, manually edited, published, and locked rosters use one rule.
+    const overtimeIntervals = intervals.filter((interval) => !interval.isRegularWork)
+    const minimumRestMinutes = minimumRestHoursBetweenOt(ctx.config) * 60
+    for (let i = 0; i + 1 < overtimeIntervals.length; i++) {
+      const earlier = overtimeIntervals[i]
+      for (let j = i + 1; j < overtimeIntervals.length; j++) {
+        const later = overtimeIntervals[j]
+        const gap = later.startAbs - earlier.endAbs
+        if (gap < 0) continue // overlap is reported by the check above
+        const touchesScheduledMonth = daySet.has(earlier.date) || daySet.has(later.date)
+        if (touchesScheduledMonth && gap < minimumRestMinutes) {
           violations.push({
-            date: other.date,
+            date: later.date,
             userId,
-            rule: 'rest_after_night',
+            shiftTypeCode: later.code,
+            rule: 'minimum_rest_between_ot',
             severity: 'error',
-            message: `${other.date}: พักก่อน OT ถัดไปหลังเวรดึกน้อยกว่า ${ctx.config.minRestHoursAfterNight} ชม.`,
+            message: `${earlier.date} ${earlier.code} → ${later.date} ${later.code}: ต้องพักระหว่างเวร OT อย่างน้อย ${minimumRestHoursBetweenOt(ctx.config)} ชม.`,
           })
         }
       }
@@ -410,12 +488,15 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
   return violations
 }
 
-function validateWeeklyRest(ctx: ValidateContext, userId: string, workDates: Set<string>, violations: Violation[]) {
+function validateWeeklyRest(
+  ctx: ValidateContext,
+  userId: string,
+  workDates: Set<string>,
+  violations: Violation[],
+) {
   if (!ctx.config.requireWeeklyDayOff || ctx.days.length === 0) return
 
   const daySet = new Set(ctx.days.map((day) => day.date))
-  const firstDate = ctx.days[0].date
-  const lastDate = ctx.days[ctx.days.length - 1].date
   const boundaryKnown = new Set<string>([
     ...(ctx.carryIn?.regularWorkDates ?? []),
     ...(ctx.carryIn?.previousKnownDates ?? []),
@@ -442,18 +523,10 @@ function validateWeeklyRest(ctx: ValidateContext, userId: string, workDates: Set
         severity: 'error',
         message: `สัปดาห์ ${monday}: ไม่มีวันหยุดประจำสัปดาห์`,
       })
-    } else if (week.some((date) => date > lastDate) && known.every((date) => workDates.has(date))) {
-      violations.push({
-        date: monday,
-        userId,
-        rule: 'weekly_day_off_pending',
-        severity: 'warning',
-        message: `สัปดาห์ ${monday}: รอข้อมูลวันทำงานของเดือนถัดไปเพื่อยืนยันวันหยุด`,
-      })
-    } else if (week.some((date) => date < firstDate)) {
-      // No previous-month roster means this edge week cannot be proven; keep
-      // it informational instead of rejecting a newly-created first month.
-      continue
     }
+    // If the week crosses a month boundary and the adjacent roster is not
+    // known, leave it unchecked for now. A future validation can hard-check
+    // it once the neighboring roster exists; the current month must not be
+    // forced to wait for a roster that has not been planned yet.
   }
 }

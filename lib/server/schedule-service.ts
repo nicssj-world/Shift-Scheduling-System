@@ -195,7 +195,9 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       if (state.unavailable.has(a.date)) state.workDates.delete(a.date)
       stats.total += 1
       stats.byType[a.code] = (stats.byType[a.code] ?? 0) + 1
+      stats.currentByType[a.code] = (stats.currentByType[a.code] ?? 0) + 1
       if (dayClassByDate.get(a.date) !== 'weekday') stats.weekendHoliday += 1
+      if (dayClassByDate.get(a.date) === 'holiday') stats.holiday += 1
     }
     for (const carry of ctx.carryIn.assignments[member.user_id] ?? []) {
       const s = slotByCode.get(carry.code)
@@ -225,6 +227,10 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
       userId: member.user_id,
       displayName: member.displayName,
       total: stats.total,
+      typeCount: stats.currentByType[slot.code] ?? 0,
+      historicalTypeCount: stats.byType[slot.code] ?? 0,
+      holiday: stats.holiday,
+      weekendHoliday: stats.weekendHoliday,
       ok: check.ok,
       reason: check.ok ? null : check.reason,
       score: fairnessScore(
@@ -232,7 +238,18 @@ export async function getCandidates(ctx: ScheduleContext, date: string, shiftTyp
         ctx.carryIn.totalCounts[member.user_id] ?? 0,
       ),
     }
-  }).sort((a, b) => Number(b.ok) - Number(a.ok) || a.total - b.total || a.score - b.score || a.displayName.localeCompare(b.displayName))
+  }).sort((a, b) => {
+    const totalDifference = a.total - b.total
+    return Number(b.ok) - Number(a.ok)
+    || (Math.abs(totalDifference) > 1 ? totalDifference : 0)
+    || (dayClass === 'holiday' ? a.holiday - b.holiday : 0)
+    || a.typeCount - b.typeCount
+    || a.historicalTypeCount - b.historicalTypeCount
+    || totalDifference
+    || (dayClass === 'weekend' ? a.weekendHoliday - b.weekendHoliday : 0)
+    || a.score - b.score
+    || a.displayName.localeCompare(b.displayName)
+  })
 }
 
 /** Full bundle for the roster views. Fetches everything for one team/month

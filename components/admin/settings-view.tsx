@@ -78,15 +78,15 @@ export function SettingsView() {
             <input type="number" min={1} max={31} className={inputCls} value={s.maxShiftsPerMonth}
               onChange={(e) => setData({ ...data, scheduler: { ...s, maxShiftsPerMonth: Number(e.target.value) } })} />
           </Field>
-          <Field label="พักขั้นต่ำก่อน OT ถัดไปหลังเวรดึก (ชั่วโมง)">
-            <input type="number" min={0} max={24} className={inputCls} value={s.minRestHoursAfterNight}
+          <Field label="พักขั้นต่ำระหว่างเวร OT (ชั่วโมง; ไม่น้อยกว่า 16)">
+            <input type="number" min={16} max={24} className={inputCls} value={s.minRestHoursAfterNight}
               onChange={(e) => setData({ ...data, scheduler: { ...s, minRestHoursAfterNight: Number(e.target.value) } })} />
           </Field>
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={s.allowAfternoonNightDouble}
             onChange={(e) => setData({ ...data, scheduler: { ...s, allowAfternoonNightDouble: e.target.checked } })} />
-          อนุญาตเวรควบ (บ่ายควบดึก = 16 ชม.พอดี) — ห้ามเกิน 16 ชม.ติดต่อกันเสมอ
+          อนุญาตเวรควบเมื่อไม่ขัดกับกฎพัก 16 ชั่วโมง — เวร OT ต้องห่างกันอย่างน้อย 16 ชั่วโมง
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={s.requireWeeklyDayOff}

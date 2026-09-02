@@ -32,7 +32,7 @@ const putSchema = z.object({
   scheduler: z.object({
     maxShiftsPerMonth: z.number().int().min(1).max(31),
     allowAfternoonNightDouble: z.boolean(),
-    minRestHoursAfterNight: z.number().min(0).max(24),
+    minRestHoursAfterNight: z.number().min(16).max(24),
     requireWeeklyDayOff: z.boolean(),
     weights: z.object({
       total: z.number().min(0), type: z.number().min(0),
