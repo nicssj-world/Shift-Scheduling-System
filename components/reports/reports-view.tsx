@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { FileSpreadsheet, FileText } from 'lucide-react'
+import { Download, Eye, FileSpreadsheet, FileText, Info } from 'lucide-react'
 import { Button, Card, EmptyState, ErrorNote, Field, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
 import { bangkokMonthNow, thaiMonthLabel } from '@/lib/dates'
 import { ATTENDANCE_REPORT_CATEGORIES, ATTENDANCE_REPORT_CATEGORY_TH, type Team } from '@/lib/types'
 import type { ScheduleBundle } from '@/components/schedule/schedule-view'
+import { RosterGrid } from '@/components/schedule/roster-grid'
 import { buildRosterExportData } from '@/lib/reports/roster-data'
 import type { AttendanceReportRow } from '@/lib/attendance'
 import type { OtReportRow } from '@/lib/reports/pdf'
@@ -73,6 +74,16 @@ export function ReportsView() {
     if (kind === 'ot' && otData) exportOtPdf(otData.rows, otData.shiftTypes.filter((t) => otData.rows.some((r) => r.byType[t.code])).map((t) => t.code), month)
   }
 
+  async function exportInitialRosterPdf() {
+    if (kind !== 'roster' || !bundle?.initialAssignments) return
+    const { exportRosterPdf } = await import('@/lib/reports/pdf')
+    const initialBundle = { ...bundle, assignments: bundle.initialAssignments }
+    exportRosterPdf(buildRosterExportData(initialBundle, month), {
+      titleSuffix: 'ตารางตั้งต้นก่อนแลก/ขายเวร',
+      fileSuffix: 'ตั้งต้นก่อนแลกขายเวร',
+    })
+  }
+
   async function exportExcel() {
     const { exportRosterExcel, exportAttendanceExcel, exportOtExcel } = await import('@/lib/reports/excel')
     if (kind === 'roster' && bundle) exportRosterExcel(buildRosterExportData(bundle, month))
@@ -86,7 +97,7 @@ export function ReportsView() {
     <div className="flex flex-col gap-4">
       <h1 className="text-lg font-bold">รายงาน</h1>
 
-      <Card className="flex flex-col gap-3">
+      <Card className="flex flex-col gap-4">
         <div className="flex gap-1">
           {([
             ['roster', 'ตารางเวรรายเดือน'],
@@ -103,7 +114,7 @@ export function ReportsView() {
           ))}
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2">
           {(kind === 'roster' || kind === 'ot') && (
             <>
               <Field label="ทีม">
@@ -127,12 +138,52 @@ export function ReportsView() {
               </Field>
             </>
           )}
-          <div className="flex items-end gap-2">
-            <Button disabled={busy} onClick={preview}>แสดงตัวอย่าง</Button>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-line/70 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-h-6 text-xs text-slate-500" aria-live="polite">
+            {!hasPreview && 'เลือกข้อมูลแล้วกด “แสดงตัวอย่าง”'}
+            {hasPreview && kind !== 'roster' && 'ตัวอย่างพร้อมดาวน์โหลด'}
+            {hasPreview && kind === 'roster' && bundle?.initialAssignments && (
+              <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                มีตารางตั้งต้นพร้อมดาวน์โหลด
+              </span>
+            )}
+            {hasPreview && kind === 'roster' && !bundle?.initialAssignments && (
+              <span id="initial-roster-status" className="inline-flex items-center gap-1.5 text-amber-700">
+                <Info size={14} aria-hidden="true" />
+                ยังไม่มี snapshot ตารางตั้งต้น
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <Button className="min-h-11 whitespace-nowrap" disabled={busy} onClick={preview}>
+              <Eye size={15} aria-hidden="true" />
+              {busy ? 'กำลังโหลด…' : 'แสดงตัวอย่าง'}
+            </Button>
             {hasPreview && (
               <>
-                <Button variant="danger" onClick={exportPdf}><FileText size={15} /> PDF</Button>
-                <Button variant="success" onClick={exportExcel}><FileSpreadsheet size={15} /> Excel</Button>
+                <Button className="min-h-11 whitespace-nowrap" variant="danger" onClick={exportPdf}>
+                  <FileText size={15} aria-hidden="true" /> PDF ปัจจุบัน
+                </Button>
+                {kind === 'roster' && (
+                  <Button
+                    className="min-h-11 whitespace-nowrap"
+                    variant="outline"
+                    disabled={!bundle?.initialAssignments}
+                    title={!bundle?.initialAssignments ? 'ยังไม่มี snapshot ตารางตั้งต้นของเดือนนี้' : 'ดาวน์โหลดตารางเวรก่อนแลก/ขายเวร'}
+                    aria-label="ดาวน์โหลด PDF ตารางเวรตั้งต้นก่อนแลกหรือขายเวร"
+                    aria-describedby={!bundle?.initialAssignments ? 'initial-roster-status' : undefined}
+                    onClick={exportInitialRosterPdf}
+                  >
+                    <Download size={15} aria-hidden="true" /> PDF ตั้งต้น
+                  </Button>
+                )}
+                <Button className="min-h-11 whitespace-nowrap" variant="success" onClick={exportExcel}>
+                  <FileSpreadsheet size={15} aria-hidden="true" /> Excel
+                </Button>
               </>
             )}
           </div>
@@ -143,9 +194,27 @@ export function ReportsView() {
       {busy && <Spinner />}
 
       {bundle && (
-        <Card className="overflow-x-auto">
-          <div className="mb-2 text-sm font-bold">ตารางเวร{bundle.team.name_th} เดือน{thaiMonthLabel(month)}</div>
-          <div className="text-xs text-slate-500">ดูตารางเต็มได้ที่หน้า &quot;ตารางเวร&quot; — กด PDF/Excel เพื่อดาวน์โหลดรูปแบบเดียวกับตารางกระดาษ</div>
+        <Card className="!p-0 overflow-hidden">
+          <div className="border-b border-line px-4 py-3 sm:px-5">
+            <div className="text-sm font-bold">ตารางเวร{bundle.team.name_th} เดือน{thaiMonthLabel(month)}</div>
+            <div className="mt-1 text-xs text-slate-500">ตัวอย่างตารางจากข้อมูลล่าสุด · เลื่อนซ้าย–ขวาเพื่อดูเวรทั้งหมด</div>
+          </div>
+          <RosterGrid
+            team={bundle.team}
+            shiftTypes={bundle.shiftTypes}
+            requirements={bundle.requirements}
+            jobs={bundle.jobs}
+            days={bundle.days}
+            holidays={bundle.holidays}
+            members={bundle.members}
+            assignments={bundle.assignments}
+            me={bundle.me}
+          />
+          {kind === 'roster' && !bundle.initialAssignments && (
+            <div className="border-t border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 sm:px-5">
+              ตารางนี้ยังไม่มี snapshot ตั้งต้น ระบบจะเริ่มเก็บเมื่อเผยแพร่ตารางครั้งแรกหลังติดตั้งฟีเจอร์นี้
+            </div>
+          )}
         </Card>
       )}
 

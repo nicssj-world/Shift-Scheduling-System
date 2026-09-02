@@ -16,14 +16,18 @@ function createThaiDoc(orientation: 'portrait' | 'landscape' = 'landscape') {
 
 /** Monthly roster PDF in the paper layout: day rows × (shift group × job) columns,
  *  thick separators between shift groups, shaded weekend/holiday rows. */
-export function exportRosterPdf(data: RosterExportData) {
+export function exportRosterPdf(data: RosterExportData, options: { titleSuffix?: string; fileSuffix?: string } = {}) {
   const doc = createThaiDoc('landscape')
   const { month, teamName, groups, days, cellText } = data
 
   doc.setFontSize(16)
-  doc.text(`ตารางปฏิบัติงานนอกเวลาราชการเดือน ${thaiMonthLabel(month)}`, 148, 12, { align: 'center' })
+  doc.text(`ตารางปฏิบัติงานนอกเวลาราชการเดือน ${thaiMonthLabel(month)}${options.titleSuffix ? ` · ${options.titleSuffix}` : ''}`, 148, 12, { align: 'center' })
   doc.setFontSize(11)
   doc.text(`${teamName} · กลุ่มงานเทคนิคการแพทย์ โรงพยาบาลชลบุรี`, 148, 18, { align: 'center' })
+  if (data.highlightCells.length > 0 && data.highlightName) {
+    doc.setFontSize(8)
+    doc.text(`สีฟ้า = เวรของ ${data.highlightName}`, 6, 22)
+  }
 
   const head1: { content: string; colSpan?: number; rowSpan?: number }[] = [{ content: 'วันที่', colSpan: 2, rowSpan: 2 }]
   const head2: { content: string }[] = []
@@ -49,11 +53,19 @@ export function exportRosterPdf(data: RosterExportData) {
     return row
   })
 
+  const highlightCells = new Set(data.highlightCells)
+  const columnKeys = new Map<number, { code: string; index: number }>()
+  let columnIndex = 2
+  for (const group of groups) {
+    group.columns.forEach((_column, index) => columnKeys.set(columnIndex + index, { code: group.code, index }))
+    columnIndex += group.columns.length
+  }
+
   const shadedRows = new Set(days.map((d, i) => (d.dayClass !== 'weekday' ? i : -1)).filter((i) => i >= 0))
   const holidayRows = new Set(days.map((d, i) => (d.dayClass === 'holiday' ? i : -1)).filter((i) => i >= 0))
 
   autoTable(doc, {
-    startY: 22,
+    startY: data.highlightCells.length > 0 ? 25 : 22,
     head: [head1, head2],
     body,
     styles: {
@@ -68,11 +80,19 @@ export function exportRosterPdf(data: RosterExportData) {
       if (groupStartCols.includes(cell.column.index)) {
         cell.cell.styles.lineWidth = { top: 0.15, right: 0.15, bottom: 0.15, left: 0.7 }
       }
+      if (cell.section === 'body') {
+        const date = days[cell.row.index]?.date
+        const column = columnKeys.get(cell.column.index)
+        if (date && column && highlightCells.has(`${date}|${column.code}|${column.index}`)) {
+          cell.cell.styles.fillColor = [210, 236, 255]
+          cell.cell.styles.textColor = [12, 60, 100]
+        }
+      }
     },
     margin: { left: 6, right: 6 },
   })
 
-  doc.save(`ตารางเวร-${teamName}-${month}.pdf`)
+  doc.save(`ตารางเวร-${teamName}-${month}${options.fileSuffix ? `-${options.fileSuffix}` : ''}.pdf`)
 }
 
 export type LeaveReportRow = { name: string; dept: string | null; month: string; typeTh: string; days: number }

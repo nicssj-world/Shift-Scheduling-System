@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Coins, Plus } from 'lucide-react'
+import { ArrowRight, Ban, CalendarDays, CheckCircle2, Clock3, Coins, Inbox, Plus, XCircle } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
+import { RequestTimeline } from '@/components/swaps/request-timeline'
 import { api } from '@/lib/client-api'
 import { bangkokMonthNow, thaiMonthLabel, thaiShortDate } from '@/lib/dates'
 import { SALE_STATUS_TH, type SaleStatus } from '@/lib/types'
@@ -202,58 +203,75 @@ export function SalesView() {
   const incoming = actionable.filter((s) => s.buyer_id === me && s.status === 'pending_buyer')
   const approvals = actionable.filter((s) => s.status === 'pending_approval')
 
-  function SaleCard({ sale }: { sale: SaleRow }) {
+  function SaleCard({ sale, showActions = true }: { sale: SaleRow; showActions?: boolean }) {
     return (
-      <Card className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Coins size={15} className="text-amber-600" />
-            {sale.sellerName} → {sale.buyerName} ({sale.shifts.length} เวร)
+      <Card className="!p-0 overflow-hidden">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+              <Coins size={18} aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-ink">
+                {sale.sellerName} <span className="font-normal text-slate-400">ขายให้</span> {sale.buyerName}
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">ส่งคำขอเมื่อ {thaiDateTime(sale.created_at)} · {sale.shifts.length} เวร</p>
+            </div>
           </div>
           <Badge tone={TONE[sale.status]}>{SALE_STATUS_TH[sale.status]}</Badge>
         </div>
-        <div className="flex flex-wrap gap-1.5 text-[13px] text-slate-600">
-          {sale.shifts.map((s, i) => (
-            <span key={i} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
-              {thaiShortDate(s.date)} · {s.type}
-            </span>
-          ))}
-        </div>
-        {sale.reason && <div className="text-xs text-slate-500">เหตุผล: {sale.reason}</div>}
-        {sale.events.length > 0 && (
-          <details className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            <summary className="cursor-pointer font-semibold text-slate-700">ประวัติรายการ ({sale.events.length})</summary>
-            <div className="mt-2 flex flex-col gap-1.5 border-l-2 border-slate-200 pl-3">
-              {sale.events.map((event) => (
-                <div key={event.id}>
-                  <span className="font-medium">
-                    {event.fromStatus
-                      ? `${SALE_STATUS_TH[event.fromStatus as SaleStatus] ?? event.fromStatus} → ${SALE_STATUS_TH[event.toStatus as SaleStatus] ?? event.toStatus}`
-                      : `สร้างคำขอ · ${SALE_STATUS_TH[event.toStatus as SaleStatus] ?? event.toStatus}`}
-                  </span>
-                  <span className="ml-2 text-slate-400">{thaiDateTime(event.createdAt)}</span>
-                </div>
+
+        <div className="grid gap-2 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-stretch sm:px-5">
+          <div className="min-w-0 rounded-xl border border-line bg-slate-50/70 p-3">
+            <p className="text-[11px] font-bold tracking-wide text-slate-500">ผู้ขาย</p>
+            <p className="mt-1 truncate text-sm font-bold text-slate-800">{sale.sellerName}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {sale.shifts.map((shift, index) => (
+                <span key={`${shift.date}-${shift.code}-${index}`} className="inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-200">
+                  <CalendarDays size={13} className="text-amber-600" aria-hidden="true" />
+                  {thaiShortDate(shift.date)} · {shift.type}
+                </span>
               ))}
             </div>
-          </details>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {sale.status === 'pending_buyer' && sale.buyer_id === me && (
-            <>
-              <Button size="sm" variant="success" disabled={busy} onClick={() => act(sale.id, 'accept')}>ตอบรับซื้อ</Button>
-              <Button size="sm" variant="danger" disabled={busy} onClick={() => act(sale.id, 'decline')}>ปฏิเสธ</Button>
-            </>
-          )}
-          {sale.status === 'pending_approval' && isScheduler && (
-            <>
-              <Button size="sm" variant="success" disabled={busy} onClick={() => act(sale.id, 'approve', 'อนุมัติและปรับตารางเวรทันที?')}>อนุมัติ</Button>
-              <Button size="sm" variant="danger" disabled={busy} onClick={() => act(sale.id, 'reject')}>ไม่อนุมัติ</Button>
-            </>
-          )}
-          {sale.status.startsWith('pending') && sale.seller_id === me && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => act(sale.id, 'cancel', 'ยกเลิกคำขอนี้?')}>ยกเลิกคำขอ</Button>
-          )}
+          </div>
+          <div className="hidden items-center justify-center text-amber-600 sm:flex" aria-hidden="true">
+            <ArrowRight size={18} />
+          </div>
+          <div className="min-w-0 rounded-xl border border-line bg-slate-50/70 p-3">
+            <p className="text-[11px] font-bold tracking-wide text-slate-500">ผู้ซื้อ</p>
+            <p className="mt-1 truncate text-sm font-bold text-slate-800">{sale.buyerName}</p>
+            <p className="mt-2 inline-flex items-center gap-1 text-xs text-slate-600"><Clock3 size={13} className="text-amber-600" aria-hidden="true" />ได้รับเพิ่ม {sale.shifts.length} เวร</p>
+          </div>
         </div>
+
+        {sale.reason && (
+          <div className="flex items-start gap-2 border-t border-line px-4 py-3 text-sm text-slate-600 sm:px-5">
+            <span className="mt-0.5 text-slate-400">เหตุผล</span>
+            <span className="min-w-0 break-words">{sale.reason}</span>
+          </div>
+        )}
+
+        <RequestTimeline events={sale.events} statusLabels={SALE_STATUS_TH} />
+
+        {showActions && (
+          <div className="flex flex-wrap gap-2 border-t border-line bg-slate-50/60 px-4 py-3 sm:px-5">
+            {sale.status === 'pending_buyer' && sale.buyer_id === me && (
+              <>
+                <Button size="sm" className="min-h-11" variant="success" disabled={busy} onClick={() => act(sale.id, 'accept')}><CheckCircle2 size={15} />ตอบรับซื้อ</Button>
+                <Button size="sm" className="min-h-11" variant="danger" disabled={busy} onClick={() => act(sale.id, 'decline')}><XCircle size={15} />ปฏิเสธ</Button>
+              </>
+            )}
+            {sale.status === 'pending_approval' && isScheduler && (
+              <>
+                <Button size="sm" className="min-h-11" variant="success" disabled={busy} onClick={() => act(sale.id, 'approve', 'อนุมัติและปรับตารางเวรทันที?')}><CheckCircle2 size={15} />อนุมัติ</Button>
+                <Button size="sm" className="min-h-11" variant="danger" disabled={busy} onClick={() => act(sale.id, 'reject')}><XCircle size={15} />ไม่อนุมัติ</Button>
+              </>
+            )}
+            {sale.status.startsWith('pending') && sale.seller_id === me && (
+              <Button size="sm" className="min-h-11" variant="outline" disabled={busy} onClick={() => act(sale.id, 'cancel', 'ยกเลิกคำขอนี้?')}><Ban size={15} />ยกเลิกคำขอ</Button>
+            )}
+          </div>
+        )}
       </Card>
     )
   }
@@ -262,28 +280,59 @@ export function SalesView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold">ขายเวร</h1>
-        <Button onClick={openCreate}><Plus size={15} /> ขายเวร</Button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-ink">ขายเวร</h1>
+          <p className="mt-1 text-sm text-slate-600">ติดตามข้อเสนอขายเวร การอนุมัติ และประวัติย้อนหลัง</p>
+        </div>
+        <Button className="min-h-11 w-full sm:w-auto" onClick={openCreate}><Plus size={16} /> ขายเวร</Button>
       </div>
       <ErrorNote error={error} />
 
       {incoming.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-bold text-amber-700">มีคนเสนอขายเวรให้ฉัน ({incoming.length})</h2>
-          {incoming.map((s) => <SaleCard key={s.id} sale={s} />)}
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/50 p-3 sm:p-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              <Inbox size={18} aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-amber-900">มีคนเสนอขายเวรให้ฉัน</h2>
+              <p className="text-xs text-amber-800/80">ตรวจสอบและตอบรับข้อเสนอที่เข้ามา</p>
+            </div>
+            <span className="ml-auto rounded-full bg-amber-200 px-2.5 py-1 text-xs font-bold text-amber-900">{incoming.length}</span>
+          </div>
+          <div className="mt-3 flex flex-col gap-3">
+            {incoming.map((s) => <SaleCard key={s.id} sale={s} />)}
+          </div>
         </section>
       )}
 
       {isScheduler && approvals.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-bold text-violet-700">รออนุมัติ ({approvals.length})</h2>
-          {approvals.map((s) => <SaleCard key={s.id} sale={s} />)}
+        <section className="rounded-2xl border border-brand-200 bg-brand-50/50 p-3 sm:p-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-100 text-brand-700">
+              <CheckCircle2 size={18} aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-brand-900">รออนุมัติ</h2>
+              <p className="text-xs text-brand-800/80">คำขอที่ผู้ซื้อยืนยันแล้ว</p>
+            </div>
+            <span className="ml-auto rounded-full bg-brand-200 px-2.5 py-1 text-xs font-bold text-brand-900">{approvals.length}</span>
+          </div>
+          <div className="mt-3 flex flex-col gap-3">
+            {approvals.map((s) => <SaleCard key={s.id} sale={s} />)}
+          </div>
         </section>
       )}
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-bold text-slate-600">ประวัติการขายเวร</h2>
+      <section className="flex flex-col gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-bold text-ink">
+            <Coins size={18} className="text-amber-600" aria-hidden="true" />
+            ประวัติการขายเวร
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">ค้นหาคำขอตามช่วงเดือน และเปิดดูรายละเอียดการดำเนินการได้</p>
+        </div>
         <HistoryControls
           from={fromMonth}
           to={toMonth}
@@ -296,7 +345,7 @@ export function SalesView() {
           onPageChange={setPage}
         />
         {history.length === 0 && <Card><EmptyState text="ไม่มีคำขอขายเวรในช่วงที่เลือก" /></Card>}
-        {history.map((s) => <SaleCard key={s.id} sale={s} />)}
+        {history.map((s) => <SaleCard key={s.id} sale={s} showActions={false} />)}
       </section>
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="ขายเวร" wide>

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { requireActor, requireAdmin } from '@/lib/server/auth'
 import { getLeaveRecorders } from '@/lib/server/attendance'
-import { getSchedulerConfig, getSwapSettings } from '@/lib/server/data'
+import { getSaleSettings, getSchedulerConfig, getSwapSettings } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
@@ -9,7 +9,9 @@ import { getAdminClient } from '@/lib/supabase/admin'
 export async function GET() {
   return respond(async () => {
     const actor = await requireActor()
-    const [scheduler, swap, leaveRecorders] = await Promise.all([getSchedulerConfig(), getSwapSettings(), getLeaveRecorders()])
+    const [scheduler, swap, sale, leaveRecorders] = await Promise.all([
+      getSchedulerConfig(), getSwapSettings(), getSaleSettings(), getLeaveRecorders(),
+    ])
     const admin = getAdminClient()
     const { data: schedulers } = await admin.from('shift_schedulers').select('user_id,created_at')
     const ids = (schedulers ?? []).map((s) => String(s.user_id))
@@ -21,6 +23,7 @@ export async function GET() {
     return {
       scheduler,
       swap,
+      sale,
       schedulers: (schedulers ?? []).map((s) => ({ userId: String(s.user_id), name: names[String(s.user_id)] ?? '' })),
       leaveRecorders,
       canManageLeaveRecorders: actor.role === 'Admin',
@@ -41,6 +44,7 @@ const putSchema = z.object({
     }),
   }).optional(),
   swap: z.object({ requiresApproval: z.boolean() }).optional(),
+  sale: z.object({ requiresApproval: z.boolean() }).optional(),
   addScheduler: z.string().uuid().optional(),
   removeScheduler: z.string().uuid().optional(),
   addLeaveRecorder: z.string().uuid().optional(),
@@ -66,6 +70,11 @@ export async function PUT(request: Request) {
     if (body.swap) {
       const { error } = await admin.from('shift_settings')
         .upsert({ key: 'swap', value: body.swap, updated_by: actor.id, updated_at: now })
+      if (error) throw new HttpError(500, error.message)
+    }
+    if (body.sale) {
+      const { error } = await admin.from('shift_settings')
+        .upsert({ key: 'sale', value: body.sale, updated_by: actor.id, updated_at: now })
       if (error) throw new HttpError(500, error.message)
     }
     if (body.addScheduler) {

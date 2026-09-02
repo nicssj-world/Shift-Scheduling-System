@@ -26,7 +26,7 @@ export function Button({ variant = 'primary', size = 'md', className = '', ...pr
   return (
     <button
       {...props}
-      className={`inline-flex items-center gap-1.5 font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${variants[variant]} ${sizes[size]} ${className}`}
+      className={`inline-flex cursor-pointer items-center gap-1.5 font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${className}`}
     />
   )
 }
@@ -63,7 +63,7 @@ export function Modal({ open, onClose, title, children, wide = false }: {
       >
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-bold">{title}</h3>
-          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100" aria-label="ปิด">
+          <button onClick={onClose} className="min-h-11 min-w-11 cursor-pointer rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2" aria-label="ปิด">
             <X size={18} />
           </button>
         </div>
@@ -83,7 +83,7 @@ export function Field({ label, children }: { label: string; children: React.Reac
 }
 
 export const inputCls =
-  'w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-200'
+  'w-full min-h-11 rounded-xl border border-line bg-white px-3 py-2 text-base outline-none transition-colors focus:border-brand-500 focus:ring-2 focus:ring-brand-200 sm:text-sm'
 
 export function Spinner() {
   return (
@@ -94,10 +94,10 @@ export function Spinner() {
 }
 
 export function EmptyState({ text }: { text: string }) {
-  return <div className="py-10 text-center text-sm text-slate-400">{text}</div>
+  return <div className="px-4 py-10 text-center text-sm text-slate-500">{text}</div>
 }
 
 export function ErrorNote({ error }: { error: string | null }) {
   if (!error) return null
-  return <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700">{error}</div>
+  return <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700">{error}</div>
 }

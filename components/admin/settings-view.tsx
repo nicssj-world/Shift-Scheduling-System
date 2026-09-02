@@ -17,6 +17,7 @@ type SchedulerConfig = {
 type SettingsData = {
   scheduler: SchedulerConfig
   swap: { requiresApproval: boolean }
+  sale: { requiresApproval: boolean }
   schedulers: { userId: string; name: string }[]
   leaveRecorders: LeaveRecorder[]
   canManageLeaveRecorders: boolean
@@ -121,6 +122,16 @@ export function SettingsView() {
           การแลกเวรต้องได้รับอนุมัติจากผู้จัดเวร (ปิด = คู่แลกตอบรับแล้วปรับตารางทันที)
         </label>
         <Button disabled={busy} onClick={() => save({ swap: data.swap })}><Save size={15} /> บันทึก</Button>
+      </Card>
+
+      <Card className="flex flex-col gap-3">
+        <h2 className="text-sm font-bold">การขายเวร</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={data.sale.requiresApproval}
+            onChange={(e) => setData({ ...data, sale: { requiresApproval: e.target.checked } })} />
+          การขายเวรต้องได้รับอนุมัติจากผู้จัดเวร (ปิด = ผู้ซื้อ ตอบรับแล้วปรับตารางทันที)
+        </label>
+        <Button disabled={busy} onClick={() => save({ sale: data.sale })}><Save size={15} /> บันทึก</Button>
       </Card>
 
       <Card className="flex flex-col gap-3">

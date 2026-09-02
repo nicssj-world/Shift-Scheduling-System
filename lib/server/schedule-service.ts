@@ -275,10 +275,23 @@ export async function getScheduleBundle(month: string, teamId: string | null, ac
   ])
   const days = classifyDays(dates, holidays)
 
-  let schedule = scheduleResult.data as unknown as Schedule | null
+  const scheduleRow = scheduleResult.data as unknown as (Schedule & { initial_assignments?: unknown }) | null
+  let schedule = scheduleRow as Schedule | null
   if (schedule && schedule.status === 'draft' && !actor.isScheduler) schedule = null
 
   const assignments = schedule ? ((await getAssignments(schedule.id)) as unknown as Assignment[]) : []
+  const storedInitialAssignments = schedule && Array.isArray(scheduleRow?.initial_assignments)
+    ? scheduleRow.initial_assignments as Assignment[]
+    : null
+  // Older published rosters have no snapshot column yet. If none of their
+  // assignments has been transferred by a swap/sale, the current rows are
+  // still the exact pre-exchange roster and are safe to use as a read-only
+  // compatibility fallback until the roster is republished with a snapshot.
+  const hasTransferredAssignments = assignments.some((assignment) => assignment.source === 'swap' || assignment.source === 'sale')
+  const initialAssignments = storedInitialAssignments
+    ?? (schedule && ['published', 'locked'].includes(schedule.status) && assignments.length > 0 && !hasTransferredAssignments
+      ? assignments
+      : null)
 
   return {
     teams: activeTeams,
@@ -297,6 +310,7 @@ export async function getScheduleBundle(month: string, teamId: string | null, ac
     })),
     schedule,
     assignments,
+    initialAssignments,
     canManage: actor.isScheduler,
     isAdmin: actor.isAdmin,
     me: actor.id,

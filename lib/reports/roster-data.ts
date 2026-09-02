@@ -8,6 +8,9 @@ export type RosterExportData = {
   days: { date: string; dayClass: DayClass }[]
   /** `${date}|${groupCode}|${columnIndex}` → name */
   cellText: Record<string, string>
+  /** Cells assigned to the current user, highlighted in exported PDFs. */
+  highlightCells: string[]
+  highlightName: string | null
 }
 
 /** Transform the schedule bundle into the paper-roster export structure
@@ -32,28 +35,45 @@ export function buildRosterExportData(bundle: ScheduleBundle, month: string): Ro
     })
 
   const cellText: Record<string, string> = {}
+  const highlightCells = new Set<string>()
+  const highlightName = nameByUser.get(bundle.me) ?? null
   for (const group of groups) {
     for (const day of bundle.days) {
       const list = bundle.assignments.filter((a) => a.work_date === day.date && a.shift_type_id === group.id)
       const placed: (string | null)[] = group.columns.map(() => null)
-      const rest: string[] = []
+      const placedUserIds: (string | null)[] = group.columns.map(() => null)
+      const rest: typeof list = []
       if (bundle.team.uses_jobs && bundle.jobs.length > 0) {
         for (const a of list) {
           const idx = bundle.jobs.findIndex((j) => j.id === a.job_id)
           const name = nameByUser.get(a.user_id) ?? '?'
-          if (idx >= 0 && !placed[idx]) placed[idx] = name
-          else rest.push(name)
+          if (idx >= 0 && !placed[idx]) {
+            placed[idx] = name
+            placedUserIds[idx] = a.user_id
+          }
+          else rest.push(a)
         }
       } else {
-        rest.push(...list.map((a) => nameByUser.get(a.user_id) ?? '?'))
+        rest.push(...list)
       }
-      for (const name of rest) {
+      for (const assignment of rest) {
+        const name = nameByUser.get(assignment.user_id) ?? '?'
         const empty = placed.findIndex((p) => p === null)
-        if (empty >= 0) placed[empty] = name
-        else placed[placed.length - 1] = `${placed[placed.length - 1]}, ${name}`
+        if (empty >= 0) {
+          placed[empty] = name
+          placedUserIds[empty] = assignment.user_id
+        } else {
+          const last = placed.length - 1
+          placed[last] = `${placed[last]}, ${name}`
+          if (assignment.user_id === bundle.me) highlightCells.add(`${day.date}|${group.code}|${last}`)
+        }
       }
       placed.forEach((name, i) => {
-        if (name) cellText[`${day.date}|${group.code}|${i}`] = name
+        if (name) {
+          const key = `${day.date}|${group.code}|${i}`
+          cellText[key] = name
+          if (placedUserIds[i] === bundle.me) highlightCells.add(key)
+        }
       })
     }
   }
@@ -64,5 +84,7 @@ export function buildRosterExportData(bundle: ScheduleBundle, month: string): Ro
     groups: groups.map(({ id: _id, ...g }) => g),
     days: bundle.days,
     cellText,
+    highlightCells: [...highlightCells],
+    highlightName,
   }
 }

@@ -182,10 +182,16 @@ export async function getTeamMembers(teamId: string, activeOnly = true): Promise
 }
 
 // ---------- schedules ----------
-export async function getSchedule(scheduleId: string): Promise<Schedule & { config: Record<string, unknown> }> {
+export type StoredSchedule = Schedule & {
+  config: Record<string, unknown>
+  /** Immutable assignment snapshot captured before the first publication. */
+  initial_assignments?: unknown
+}
+
+export async function getSchedule(scheduleId: string): Promise<StoredSchedule> {
   const { data, error } = await admin().from('shift_schedules').select('*').eq('id', scheduleId).maybeSingle()
   if (error || !data) throw new HttpError(404, 'ไม่พบตารางเวร')
-  return data as unknown as Schedule & { config: Record<string, unknown> }
+  return data as unknown as StoredSchedule
 }
 
 export async function getAssignments(scheduleId: string): Promise<Record<string, unknown>[]> {

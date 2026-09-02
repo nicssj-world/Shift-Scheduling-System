@@ -3,7 +3,7 @@ import { requireScheduler } from '@/lib/server/auth'
 import { HttpError } from '@/lib/server/errors'
 import { notifyUsers } from '@/lib/server/notify'
 import { readJson, respond } from '@/lib/server/route'
-import { getSchedule, getTeam, getTeamMembers } from '@/lib/server/data'
+import { getAssignments, getSchedule, getTeam, getTeamMembers } from '@/lib/server/data'
 import { loadScheduleContext, validateSchedule } from '@/lib/server/schedule-service'
 import { getAdminClient } from '@/lib/supabase/admin'
 import { thaiMonthLabel } from '@/lib/dates'
@@ -32,9 +32,17 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           `ยังเผยแพร่ไม่ได้: ตารางมีข้อผิดพลาด ${hardErrors.length} จุด กรุณาแก้ไขหรือสร้างตารางอัตโนมัติใหม่ก่อน`,
         )
       }
-      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), {
+      const publishValues: Record<string, unknown> = {
         status: 'published', published_at: now, published_by: actor.id,
-      })
+      }
+      // Capture the roster immediately before its first publication. This is
+      // the immutable baseline used by the "initial roster" PDF; later swaps,
+      // sales, or manual corrections must not change it.
+      if (schedule.initial_assignments == null) {
+        const assignments = await getAssignments(id)
+        publishValues.initial_assignments = assignments
+      }
+      await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), publishValues)
       const [team, members] = await Promise.all([getTeam(schedule.team_id), getTeamMembers(schedule.team_id)])
       await notifyUsers(members.map((m) => m.user_id), {
         type: 'schedule_published',

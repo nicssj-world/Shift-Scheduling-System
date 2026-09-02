@@ -20,6 +20,7 @@ export type ScheduleBundle = {
   members: BundleMember[]
   schedule: Schedule | null
   assignments: Assignment[]
+  initialAssignments: Assignment[] | null
   canManage: boolean
   isAdmin: boolean
   me: string
@@ -210,9 +211,18 @@ export function ScheduleView({ manage }: { manage: boolean }) {
     }
   }
 
-  const errorCount = violations.filter((v) => v.severity === 'error').length
   const schedule = bundle?.schedule ?? null
   const status = schedule ? STATUS_TH[schedule.status] : null
+  // Fairness is a quality check for the initial roster. Once a roster has
+  // been published, swaps/sales are allowed to change the distribution, so
+  // keep showing only actionable hard errors. `published_at` stays populated
+  // if an already-published roster is returned to draft, which prevents the
+  // initial-balance warning from coming back after the roster was opened.
+  const isInitialDraft = schedule?.status === 'draft' && !schedule.published_at
+  const visibleViolations = isInitialDraft
+    ? violations
+    : violations.filter((violation) => violation.severity === 'error')
+  const errorCount = visibleViolations.filter((v) => v.severity === 'error').length
   const isEmptyDraft = schedule?.status === 'draft'
     && !schedule.generated_at
     && (bundle?.assignments.length ?? 0) === 0
@@ -404,14 +414,14 @@ export function ScheduleView({ manage }: { manage: boolean }) {
       )}
 
       {/* violations */}
-      {manage && violations.length > 0 && (
+      {manage && visibleViolations.length > 0 && (
         <Card>
           <div className="mb-2 flex items-center gap-2 text-sm font-bold">
             <AlertTriangle size={16} className="text-amber-500" />
-            ผลตรวจสอบกฎการจัดเวร ({errorCount} ข้อผิดพลาด / {violations.length - errorCount} คำเตือน)
+            ผลตรวจสอบกฎการจัดเวร ({errorCount} ข้อผิดพลาด / {visibleViolations.length - errorCount} คำเตือน)
           </div>
           <div className="max-h-48 overflow-y-auto text-[13px]">
-            {violations.slice(0, 80).map((v, i) => (
+            {visibleViolations.slice(0, 80).map((v, i) => (
               <div key={i} className={`border-l-2 py-0.5 pl-2 ${v.severity === 'error' ? 'border-red-400 text-red-700' : 'border-amber-400 text-amber-700'}`}>
                 {v.message}
               </div>
