@@ -64,7 +64,10 @@ export async function getSwapSettings() {
 }
 
 export async function getSaleSettings() {
-  return getSetting<{ requiresApproval: boolean }>('sale', { requiresApproval: true })
+  return getSetting<{ requiresApproval: boolean; openEnabled: boolean }>('sale', {
+    requiresApproval: true,
+    openEnabled: false,
+  })
 }
 
 // ---------- reference data ----------
@@ -184,7 +187,7 @@ export async function getTeamMembers(teamId: string, activeOnly = true): Promise
 // ---------- schedules ----------
 export type StoredSchedule = Schedule & {
   config: Record<string, unknown>
-  /** Immutable assignment snapshot captured before the first publication. */
+  /** Immutable assignment snapshot captured before the first publication; also the scheduler's historical baseline. */
   initial_assignments?: unknown
 }
 
@@ -248,12 +251,56 @@ export function buildSlots(shiftTypes: ShiftType[], requirements: Requirement[])
 /**
  * Carry-in for fairness across months:
  * - totalCounts / shiftTypeCounts / jobCounts / weekendHolidayCounts /
- *   pairCounts: completed schedules in the preceding six calendar months.
+ *   pairCounts: completed schedules in the preceding six calendar months,
+ *   using each schedule's immutable pre-publication roster when available.
  * - assignments / regularWorkDates and optional future* fields: six-day
  *   previous/next-month boundary context used for rest, 16-hour continuity,
  *   and cross-month weekly-day-off checks.
  */
 export const FAIRNESS_WINDOW_MONTHS = 6
+
+type CarryInSchedule = {
+  id: string
+  month: string
+  /** null means the schedule predates the immutable baseline migration. */
+  initialAssignments: Record<string, unknown>[] | null
+}
+
+/**
+ * Normalize the immutable pre-publication snapshot to the same shape returned
+ * by the assignments table. A valid empty array is deliberately preserved as
+ * an empty baseline; only a missing/non-array value falls back to live rows.
+ */
+export function parseInitialAssignments(schedule: { id: unknown; initial_assignments?: unknown }): Record<string, unknown>[] | null {
+  if (!Array.isArray(schedule.initial_assignments)) return null
+  const scheduleId = String(schedule.id)
+  const normalized: Record<string, unknown>[] = []
+  for (const value of schedule.initial_assignments) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const row = value as Record<string, unknown>
+    const workDate = row.work_date ?? row.workDate
+    const shiftTypeId = row.shift_type_id ?? row.shiftTypeId
+    const userId = row.user_id ?? row.userId
+    if (workDate == null || shiftTypeId == null || userId == null) continue
+    normalized.push({
+      // The snapshot belongs to the schedule row being read. Do not trust a
+      // copied/stale schedule_id inside an individual JSON object for pairing.
+      schedule_id: scheduleId,
+      work_date: String(workDate),
+      shift_type_id: String(shiftTypeId),
+      user_id: String(userId),
+      job_id: row.job_id ?? row.jobId ?? null,
+    })
+  }
+  return normalized
+}
+
+function rowsWithinDates(rows: Record<string, unknown>[], fromDate: string, toDate: string): Record<string, unknown>[] {
+  return rows.filter((row) => {
+    const date = String(row.work_date ?? '')
+    return date >= fromDate && date <= toDate
+  })
+}
 
 export async function buildCarryIn(teamId: string, month: string, shiftTypes: ShiftType[], jobs: Job[]): Promise<CarryIn> {
   const prevMonth = previousMonth(month)
@@ -275,7 +322,7 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   // the target month influence fairness. In particular, never let a future
   // roster or an abandoned Draft bias a schedule being generated now.
   const [{ data: schedules, error: schedulesError }, { data: fairnessRows, error: fairnessError }, holidays, { data: followingSchedule, error: followingScheduleError }, followingHolidays] = await Promise.all([
-    admin().from('shift_schedules').select('id,month,status')
+    admin().from('shift_schedules').select('id,month,status,initial_assignments')
       .eq('team_id', teamId)
       .gte('month', `${fromMonth}-01`)
       .lte('month', `${prevMonth}-01`)
@@ -286,7 +333,7 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
       p_to_month: `${month}-01`,
     }),
     getHolidays(fromDates[0], prevDates[prevDates.length - 1]),
-    admin().from('shift_schedules').select('id,month,status')
+    admin().from('shift_schedules').select('id,month,status,initial_assignments')
       .eq('team_id', teamId)
       .eq('month', `${followingMonth}-01`)
       .in('status', ['published', 'locked'])
@@ -301,18 +348,28 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   for (const row of (fairnessRows ?? []) as { user_id: string; total: number }[]) {
     totalCounts[String(row.user_id)] = Number(row.total)
   }
-  const completed = (schedules ?? []).map((schedule) => ({ id: String(schedule.id), month: String(schedule.month).slice(0, 7) }))
-  const previousScheduleIds = completed.map((schedule) => schedule.id)
+  const completed: CarryInSchedule[] = (schedules ?? []).map((schedule) => ({
+    id: String(schedule.id),
+    month: String(schedule.month).slice(0, 7),
+    initialAssignments: parseInitialAssignments(schedule),
+  }))
   let rows: Record<string, unknown>[] = []
   // The normal path gets all fairness dimensions from the bounded SQL
   // aggregation above. Only an installation that has not run the migration
   // falls back to reading the bounded six-month rows temporarily.
-  if (fairnessError && previousScheduleIds.length > 0) {
-    const { data, error } = await admin().from('shift_assignments')
-      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
-      .in('schedule_id', previousScheduleIds)
+  if (fairnessError) {
+    const schedulesWithoutSnapshot = completed.filter((schedule) => schedule.initialAssignments === null)
+    const currentRowsPromise = schedulesWithoutSnapshot.length > 0
+      ? admin().from('shift_assignments')
+        .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+        .in('schedule_id', schedulesWithoutSnapshot.map((schedule) => schedule.id))
+      : Promise.resolve({ data: [], error: null })
+    const { data, error } = await currentRowsPromise
     if (error) throw new HttpError(500, error.message)
-    rows = (data ?? []) as Record<string, unknown>[]
+    rows = [
+      ...completed.flatMap((schedule) => schedule.initialAssignments ?? []),
+      ...((data ?? []) as Record<string, unknown>[]),
+    ]
   }
 
   // Compatibility fallback for environments where the rolling aggregation
@@ -326,7 +383,8 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   }
 
   const holidaySet = new Set((holidays ?? []).map((holiday) => holiday.holiday_date))
-  const previousScheduleId = completed.find((schedule) => schedule.month === prevMonth)?.id
+  const previousSchedule = completed.find((schedule) => schedule.month === prevMonth)
+  const previousScheduleId = previousSchedule?.id
   const regularWorkDates = previousScheduleId
     ? boundaryDates.filter((date) => !isWeekend(date) && !holidaySet.has(date))
     : []
@@ -343,24 +401,33 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
 
   let boundaryRows: Record<string, unknown>[] = []
   if (previousScheduleId) {
-    const { data, error } = await admin().from('shift_assignments')
-      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
-      .eq('schedule_id', previousScheduleId)
-      .gte('work_date', boundaryDates[0])
-      .lte('work_date', boundaryDates[boundaryDates.length - 1])
-    if (error) throw new HttpError(500, error.message)
-    boundaryRows = (data ?? []) as Record<string, unknown>[]
+    if (previousSchedule?.initialAssignments !== null) {
+      boundaryRows = rowsWithinDates(previousSchedule?.initialAssignments ?? [], boundaryDates[0], boundaryDates[boundaryDates.length - 1])
+    } else {
+      const { data, error } = await admin().from('shift_assignments')
+        .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+        .eq('schedule_id', previousScheduleId)
+        .gte('work_date', boundaryDates[0])
+        .lte('work_date', boundaryDates[boundaryDates.length - 1])
+      if (error) throw new HttpError(500, error.message)
+      boundaryRows = (data ?? []) as Record<string, unknown>[]
+    }
   }
 
   let futureRows: Record<string, unknown>[] = []
   if (followingSchedule) {
-    const { data, error } = await admin().from('shift_assignments')
-      .select('schedule_id,work_date,shift_type_id,user_id,job_id')
-      .eq('schedule_id', String(followingSchedule.id))
-      .gte('work_date', futureBoundaryDates[0])
-      .lte('work_date', futureBoundaryDates[futureBoundaryDates.length - 1])
-    if (error) throw new HttpError(500, error.message)
-    futureRows = (data ?? []) as Record<string, unknown>[]
+    const followingBaseline = parseInitialAssignments(followingSchedule)
+    if (followingBaseline !== null) {
+      futureRows = rowsWithinDates(followingBaseline, futureBoundaryDates[0], futureBoundaryDates[futureBoundaryDates.length - 1])
+    } else {
+      const { data, error } = await admin().from('shift_assignments')
+        .select('schedule_id,work_date,shift_type_id,user_id,job_id')
+        .eq('schedule_id', String(followingSchedule.id))
+        .gte('work_date', futureBoundaryDates[0])
+        .lte('work_date', futureBoundaryDates[futureBoundaryDates.length - 1])
+      if (error) throw new HttpError(500, error.message)
+      futureRows = (data ?? []) as Record<string, unknown>[]
+    }
   }
   // Fairness dimensions are already grouped by Postgres in the normal path.
   // Keep the JS reduction solely as a bounded compatibility fallback when the
@@ -408,7 +475,7 @@ export async function buildCarryIn(teamId: string, month: string, shiftTypes: Sh
   }
 
   // Boundary intervals are used for hard rest/16-hour checks only and come
-  // from the immediately preceding completed roster.
+  // from the immediately preceding completed roster's pre-transfer baseline.
   for (const row of boundaryRows) {
     const code = typeCodeById.get(String(row.shift_type_id))
     if (!code) continue

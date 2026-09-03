@@ -38,7 +38,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       // Capture the roster immediately before its first publication. This is
       // the immutable baseline used by the "initial roster" PDF; later swaps,
       // sales, or manual corrections must not change it.
-      if (schedule.initial_assignments == null) {
+      if (schedule.status === 'draft' && schedule.published_at == null && schedule.initial_assignments == null) {
         const assignments = await getAssignments(id)
         publishValues.initial_assignments = assignments
       }
@@ -64,7 +64,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         status: 'locked', locked_at: now, locked_by: actor.id,
       })
     } else if (action === 'unlock') {
-      if (!actor.isAdmin) throw new HttpError(403, 'เฉพาะ Admin เท่านั้นที่ปลดล็อคได้')
+      if (!actor.isScheduler) throw new HttpError(403, 'เฉพาะ Admin หรือผู้ได้รับมอบหมายจัดเวรเท่านั้นที่ปลดล็อคได้')
       await updateScheduleWithVersion(admin, id, schedule.status, scheduleVersion(schedule), {
         status: 'published', locked_at: null, locked_by: null,
       })

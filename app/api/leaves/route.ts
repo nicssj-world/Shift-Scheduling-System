@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       return {
         scope,
         canManage,
-        canManageHolidays: actor.isAdmin,
+        canManageHolidays: actor.isScheduler,
         me: actor.id,
         ...grid,
         availablePeople: canManage ? grid.availablePeople : [],

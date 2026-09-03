@@ -142,7 +142,7 @@ describe('validateAssignments', () => {
     expect(violations.some((v) => v.rule === 'holiday_imbalance' && v.severity === 'warning')).toBe(true)
   })
 
-  it('warns when one shift type is concentrated on one person', () => {
+  it('rejects when one shift type is concentrated on one person', () => {
     const slot = {
       ...makeSlots(0).find((item) => item.code === 'A')!,
       requiredByDayClass: { weekday: 1, weekend: 0, holiday: 0 } as const,
@@ -160,7 +160,32 @@ describe('validateAssignments', () => {
       a('2026-08-03', 'A', 'u01'),
       a('2026-08-04', 'A', 'u01'),
     ])
-    expect(violations.some((v) => v.rule === 'type_imbalance' && v.shiftTypeCode === 'A' && v.severity === 'warning')).toBe(true)
+    expect(violations.some((v) => v.rule === 'type_imbalance' && v.shiftTypeCode === 'A' && v.severity === 'error')).toBe(true)
+  })
+
+  it('suppresses distribution violations after a swap or sale', () => {
+    const slot = {
+      ...makeSlots(0).find((item) => item.code === 'A')!,
+      requiredByDayClass: { weekday: 1, weekend: 0, holiday: 0 } as const,
+    }
+    const violations = validateAssignments(ctx({
+      days: [
+        { date: '2026-08-03', dayClass: 'weekday' },
+        { date: '2026-08-04', dayClass: 'weekday' },
+      ],
+      slots: [slot],
+      members: [{ userId: 'u01' }, { userId: 'u02' }],
+      exactCoverage: false,
+      suppressFairness: true,
+      config: { ...DEFAULT_CONFIG, requireWeeklyDayOff: false },
+    }), [
+      a('2026-08-03', 'A', 'u01'),
+      a('2026-08-04', 'A', 'u01'),
+    ])
+
+    expect(violations.some((v) => v.rule === 'type_imbalance')).toBe(false)
+    expect(violations.some((v) => v.rule === 'imbalance')).toBe(false)
+    expect(violations.some((v) => v.rule === 'holiday_imbalance')).toBe(false)
   })
 
   it('flags exceeding max shifts per month', () => {

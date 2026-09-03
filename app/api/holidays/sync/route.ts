@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireAdmin } from '@/lib/server/auth'
+import { requireScheduler } from '@/lib/server/auth'
 import { syncGoogleThaiHolidays } from '@/lib/server/google-holidays'
 import { readJson, respond } from '@/lib/server/route'
 
@@ -9,7 +9,7 @@ const syncSchema = z.object({
 
 export async function POST(request: Request) {
   return respond(async () => {
-    const actor = await requireAdmin()
+    const actor = await requireScheduler()
     const body = await readJson(request, syncSchema)
     return syncGoogleThaiHolidays(body.year, actor.id)
   })

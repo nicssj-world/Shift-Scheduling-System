@@ -5,6 +5,16 @@
 **Production:** https://shift-scheduling-system-mtcbh.vercel.app
 **Repo:** https://github.com/nicssj-world/Shift-Scheduling-System
 
+## Open-sale marketplace
+
+Apply `supabase/migrations/202609030004_open_sale_marketplace.sql` after the existing LINE/group-mapping migrations in the Supabase SQL Editor. The migration is idempotent and adds the global `sale.openEnabled` flag, multi-month same-team listings (up to 31 shifts), per-item expiry, audit events, and version-safe claim/apply RPCs.
+
+Apply `supabase/migrations/202609030005_initial_roster_carry_in.sql` after the snapshot migration. It makes next-month carry-in fairness and boundary checks use each published schedule's immutable pre-swap/pre-sale roster; schedules without a snapshot keep the compatibility fallback to their current assignments.
+
+The unified marketplace is available at `/sales/open` and `/line/open-sales`. It is filtered to teams the viewer may access; claiming still requires active membership in the target team and all hard scheduling rules. Set `sale.openEnabled=true` in Admin → System settings to enable it, then keep `sale.requiresApproval` to choose immediate transfer or scheduler approval.
+
+Listings are grouped as one card per sale request. A shift remains claimable through its Bangkok calendar date; cleanup runs before marketplace reads/mutations and every 15 minutes from the LINE dispatcher. Expired items are retained for audit, removed from the market, and a request becomes `expired` only when no future active items remain.
+
 ---
 
 ## ภาพรวมฟีเจอร์
@@ -16,7 +26,7 @@
 | **แลกเวร** | คู่แลก 1 ต่อ 1 — คู่แลกตอบรับ → ผู้จัดเวรอนุมัติ (ปิดขั้นตอนอนุมัติได้ผ่านตั้งค่า) |
 | **ขายเวร** | โอนเวรทางเดียวได้หลายเวรพร้อมกัน — ผู้ขายลดเวร ผู้ซื้อเพิ่มเวรตามจำนวนที่รับ |
 | **ทะเบียนวันลาและการมาปฏิบัติงาน** | ธุรการบันทึกข้อมูลรายวันแทนบุคลากร รองรับ 10 รหัส จัดการรายชื่อในตารางเพิ่ม/นำออกได้ภายหลัง ทุกคนดูทะเบียนรวมและประวัติของตนเองได้ สรุปเป็น PDF/Excel ได้ โดยไม่ใช่ระบบยื่นลาและไม่กระทบการจัดเวร |
-| **แจ้งเตือน** | ในแอปผ่าน Supabase Realtime (กระดิ่งแจ้งเตือน) + เตือนเวรวันพรุ่งนี้อัตโนมัติทุกวันผ่าน Vercel Cron |
+| **แจ้งเตือน** | ในแอปผ่าน Supabase Realtime (กระดิ่งแจ้งเตือน) + เตือนเวรวันพรุ่งนี้อัตโนมัติทุกวันผ่าน Vercel Cron + LINE OA ส่วนตัว/กลุ่มที่ Admin mapping ไว้ |
 | **Dashboard** | ภาพรวมกำลังคน, อัตราครอบคลุมเวร, กราฟ/heatmap ภาระงาน |
 | **วิเคราะห์** | ตรวจจับเวรเกินมาตรฐาน, ความไม่สมดุลของภาระงาน, คาดการณ์กำลังคนเดือนถัดไป (rule-based ล้วน ไม่มี LLM) |
 | **รายงาน** | ตารางเวรรายเดือน / สรุปทะเบียนวันลาและการมาปฏิบัติงาน / สรุป OT — export PDF (ฟอนต์ไทย Sarabun) และ Excel |
@@ -80,6 +90,15 @@ GOOGLE_HOLIDAY_CALENDAR_ID=th.th#holiday@group.v.calendar.google.com
 | `202608310003_scheduler_rule_hardening.sql` | เพิ่ม flag เวรดึก, rolling fairness 6 เดือน (รวมทุกมิติใน Postgres aggregation) และ RPC แบบ atomic สำหรับสร้าง/แก้ตารางพร้อม version check |
 | `202608310004_shift_attendance_register.sql` | ทะเบียนวันลา/การมาปฏิบัติงานรายวัน, รายชื่อผู้บันทึก, roster รายชื่อในตาราง, RLS และ RPC รายงานรวม |
 | `202608310005_shift_vacation_balances.sql` | สิทธิ์พักร้อนแยกบุคลากรและปีงบประมาณ พร้อมยอดยกมาจากปีก่อน สิทธิ์ปีปัจจุบัน และ RLS |
+| `202609020001_shift_initial_roster_snapshot.sql` | เพิ่ม snapshot รายการเวรฉบับก่อนเผยแพร่ครั้งแรก เพื่อคง baseline แม้มีการแลก/ขาย/แก้เวรภายหลัง |
+| `202609020002_line_integration.sql` | LINE account linking, MINI App, webhook, notification outbox, approved groups และ feature flags |
+| `202609030001_line_group_mapping.sql` | Mapping กลุ่มงาน/ประเภทเวรกับ LINE Group เพื่อแยกประกาศตามห้องเวร |
+| `202609030002_project_management_permissions.sql` | จำกัดสิทธิ์จัดการโปรเจกต์ไว้ที่ Admin และผู้ได้รับมอบหมายจัดเวร (ยกเว้นตั้งค่าระบบ/LINE Integration); Manager เป็นสิทธิ์ดูอย่างเดียว |
+| `202609030003_central_lab_section_weights.sql` | เพิ่มค่า preference Chem/Sero และ Hemato/Micros ต่อสมาชิก Central Lab (0–100%, รวม 100%) สำหรับการหมุน Job อัตโนมัติ |
+| `202609030004_open_sale_marketplace.sql` | ตลาดเวรเปิดขายแบบรวมทุกทีมที่ผู้ใช้เข้าถึงได้, ประกาศข้ามเดือนได้ในทีมเดียว (สูงสุด 31 เวร), claim แบบตรวจ version, expiry รายเวร และ audit history |
+| `202609030005_initial_roster_carry_in.sql` | ให้ rolling fairness และ carry-in ช่วงรอยต่อเดือนอ้างอิง roster snapshot ก่อนแลก/ขายเวร พร้อม fallback สำหรับตารางเก่าที่ไม่มี snapshot |
+
+ก่อนใช้ค่า section preference ให้รัน `202609030003_central_lab_section_weights.sql` ใน Supabase SQL Editor; สมาชิกเดิมจะเริ่มต้นที่ 50/50 และสามารถรันไฟล์ซ้ำได้
 
 นำเข้าข้อมูลจาก Excel หลัง migration โดยเริ่มจาก dry-run (ต้องมี `SUPABASE_SERVICE_ROLE_KEY` ใน `.env.local`):
 
@@ -108,14 +127,16 @@ npm run dev
 |---|---|---|---|---|
 | จัดตารางเวร (generate/แก้/เผยแพร่/ล็อค/ปลดล็อค) | ✅ | ✅ (เทียบเท่า Admin) | ❌ | ❌ |
 | อนุมัติแลก/ขายเวร | ✅ | ✅ | ❌ | ❌ |
-| ตั้งค่าระบบ / ทีมเวร / ประเภทเวร / วันหยุดพิเศษ | ✅ | ✅ | ❌ | ❌ |
+| จัดการทีมเวร / ประเภทเวร / วันหยุดพิเศษ | ✅ | ✅ | ❌ | ❌ |
+| ตั้งค่าระบบ | ✅ | ❌ | ❌ | ❌ |
+| LINE Integration | ✅ | ❌ | ❌ | ❌ |
 | หน้าวิเคราะห์ (Analytics) | ✅ | ✅ | ❌ | ❌ |
 | Dashboard (ภาพรวม) | ✅ | ✅ | ✅ | ❌ |
 | บันทึก/แก้ไข/ลบทะเบียนวันลาแทนบุคลากร | ✅ | ❌ | เมื่อได้รับมอบหมายเท่านั้น | ❌ |
 | เพิ่ม/นำ user เข้า–ออกจากรายชื่อในตารางทะเบียน | ✅ | ❌ | เมื่อได้รับมอบหมายเท่านั้น | ❌ |
 | ดูตารางเวร, ขอแลก/ขายเวร, ดูทะเบียนวันลา | ✅ | ✅ | ✅ | ✅ |
 
-**หลักการ:** สิทธิ์จัดเวร (`shift_schedulers`) และสิทธิ์บันทึกทะเบียน (`shift_leave_recorders`) แยกกันโดยตั้งใจ ผู้ที่ถูกมอบหมายจัดเวรไม่สามารถแก้ทะเบียนได้เอง เว้นแต่ Admin เพิ่มชื่อในรายชื่อผู้บันทึก ส่วน Admin มีสิทธิ์สำรองเสมอ
+**หลักการ:** สิทธิ์จัดการโปรเจกต์ (`shift_schedulers`) และสิทธิ์บันทึกทะเบียน (`shift_leave_recorders`) แยกกันโดยตั้งใจ ผู้ที่ถูกมอบหมายจัดเวรมีสิทธิ์เทียบเท่า Admin ในงานจัดเวร ยกเว้น `ตั้งค่าระบบ` และ `LINE Integration`; ไม่สามารถแก้ทะเบียนได้เอง เว้นแต่ Admin เพิ่มชื่อในรายชื่อผู้บันทึก ส่วน Admin มีสิทธิ์เต็มเสมอ
 
 ---
 
@@ -135,15 +156,16 @@ npm run dev
 - ทีมที่เปิด Job ต้องใช้ Job ที่ใช้งานอยู่ของทีมนั้นอย่างละหนึ่งครั้งต่อวัน×ประเภทเวร และจำนวน Job ต้องตรงจำนวนคนที่กำหนด
 
 ### Fairness scoring (`lib/scheduler/fairness.ts`)
-จำนวนเวรของเดือนปัจจุบันเป็นลำดับแรก และเมื่อทุกคนพร้อมทำเวรต้องต่างกันไม่เกิน 1 เวร จากนั้นจึงคิดคะแนนย่อย: ยอดสะสมข้ามเดือน + เวรประเภทเดียวกัน + เวรวันหยุด/วันธรรมดา + วันทำงานติดต่อกัน + โทษการจับคู่คนเดิมซ้ำ (`pairing` weight — ป้องกันคนสองคนถูกจัดเวรเดียวกันซ้ำๆ) ปรับน้ำหนักแต่ละตัวได้ที่หน้าตั้งค่าระบบ
+จำนวนเวรของเดือนปัจจุบันเป็นลำดับแรก และเมื่อทุกคนพร้อมทำเวรต้องต่างกันไม่เกิน 1 เวร จากนั้นจึงคิดคะแนนย่อย: ยอดสะสมข้ามเดือน + เวรประเภทเดียวกัน + เวรวันหยุด/วันธรรมดา + วันทำงานติดต่อกัน + โทษการจับคู่คนเดิมซ้ำ (`pairing` weight — ป้องกันคนสองคนถูกจัดเวรเดียวกันซ้ำๆ) ปรับน้ำหนักแต่ละตัวได้ที่หน้าตั้งค่าระบบ หากการจัดอัตโนมัติทำให้เวรประเภทใดต่างกันเกิน 1 ระบบจะหยุดก่อนบันทึก Draft เพื่อไม่ให้ได้ตารางผิดกฎ
 
 การเลือกคนต่อ 1 ช่องเวรใช้วิธี **เลือกทีละคนแล้วคิดคะแนนใหม่** (ไม่ใช่ sort ครั้งเดียวตัด N คนแรก) เพื่อไม่ให้สองคนที่คะแนนเท่ากันถูกจับคู่ซ้ำตลอดไป และใช้ **hash กำหนดได้ (deterministic) ของ (วันที่, ประเภทเวร, คน)** แทนการเรียงตามรหัสพนักงานตรงๆ เป็นตัวตัดสินเสมอ — ป้องกันไม่ให้คนรหัสน้อยชนะ tie-break ทุกครั้งจนเกิด clique
 
 ### ยอดเวรสะสมข้ามเดือน (rolling carry-in)
+เมื่อมี `initial_assignments` ระบบจะอ้างอิง roster snapshot ก่อนเผยแพร่/แลก/ขายเวรของแต่ละเดือน เพื่อไม่ให้การโอนภายหลังเปลี่ยน fairness ของเดือนถัดไป; ตารางเก่าที่ไม่มี snapshot จะใช้ข้อมูล assignment ปัจจุบันเป็น fallback ชั่วคราว
 ระบบใช้ยอดเวรของตารางที่ยืนยันแล้วใน **6 เดือนก่อนหน้า** เพื่อหมุนว่าใครควรได้เวรส่วนเกิน โดยไม่ทำให้ยอดภายในเดือนปัจจุบันต่างกันเกิน 1 ไม่รวมตาราง Draft หรือเดือนอนาคต ส่วนประเภทเวร, Job, ภาระเวรวันหยุด และคู่เวรใช้หน้าต่างเดียวกัน รวมถึงนำเวรปลายเดือนกับงานประจำวันธรรมดามาตรวจเพดาน 16 ชั่วโมงและวันหยุดประจำสัปดาห์ข้ามรอยต่อเดือน
 
 ### Job rotation (`lib/scheduler/rotation.ts`)
-ทีมที่ `uses_jobs = true` (เช่น เจ้าหน้าที่ Central Lab) จะหมุนเวียน Job ตาม count สะสมต่ำสุดก่อน (รวม carry-in 6 เดือน) และตรวจไม่ให้ Job ซ้ำ/ขาดในเวรเดียวกัน
+ทีมที่ `uses_jobs = true` (เช่น เจ้าหน้าที่ Central Lab) จะหมุนเวียน Job ตาม count สะสมต่ำสุดก่อน (รวม carry-in 6 เดือน) และตรวจไม่ให้ Job ซ้ำ/ขาดในเวรเดียวกัน สำหรับเจ้าหน้าที่ Central Lab ระบบจะใช้ section preference ของสมาชิกเป็นลำดับแรกในการลง Job: `CHEM/SERO` = `chem_sero`, `HEMATO/MICROSS` = `hemato_micros`; ภายใน section เดียวกันจะจับคู่ Job ให้สมดุล (เช่น Hemato/Micros 100% จะหมุน Hemato และ Micros ใกล้เคียง 50/50 ไม่ใช่ Hemato อย่างเดียว); ค่า 0% เป็นเพียงความสำคัญต่ำสุด ไม่ใช่การห้ามจัด และจะ fallback เมื่อจำเป็น
 
 ---
 
@@ -207,4 +229,5 @@ Deployment protection (Vercel SSO) ปิดไว้แล้วที่ระ
 - ทะเบียนครึ่งวันเป็นข้อมูลรายงาน 0.5 วันเท่านั้น ไม่ถูกใช้เป็น unavailable หรือข้อจำกัดของ scheduler
 - Weekly-day-off ไม่เช็คสัปดาห์ที่คาบเกี่ยวขอบเดือน (เฉพาะสัปดาห์เต็มในเดือนนั้น)
 - ยอดเวรสะสมข้ามเดือนนับเฉพาะภายในทีมเดียวกัน (คนละทีมไม่รวมกัน)
-- ไม่มีการแจ้งเตือนผ่าน LINE/email — เฉพาะ in-app เท่านั้น
+- LINE Integration มีโครงสร้าง OA/MINI App, account linking, swap/sale, webhook และ notification outbox แล้ว แต่ยังต้องรัน migration และตั้งค่า LINE Console ตาม [คู่มือ LINE](docs/LINE_SETUP.md) ก่อนเปิดใช้งานจริง
+- ยังไม่มีการส่งอีเมล — การแจ้งเตือนในระบบเดิมยังเป็น in-app และ LINE ตาม feature flag

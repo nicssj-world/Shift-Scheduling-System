@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireActor, requireAdmin } from '@/lib/server/auth'
+import { requireAdmin } from '@/lib/server/auth'
 import { getLeaveRecorders } from '@/lib/server/attendance'
 import { getSaleSettings, getSchedulerConfig, getSwapSettings } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
@@ -8,7 +8,7 @@ import { getAdminClient } from '@/lib/supabase/admin'
 
 export async function GET() {
   return respond(async () => {
-    const actor = await requireActor()
+    const actor = await requireAdmin()
     const [scheduler, swap, sale, leaveRecorders] = await Promise.all([
       getSchedulerConfig(), getSwapSettings(), getSaleSettings(), getLeaveRecorders(),
     ])
@@ -44,7 +44,9 @@ const putSchema = z.object({
     }),
   }).optional(),
   swap: z.object({ requiresApproval: z.boolean() }).optional(),
-  sale: z.object({ requiresApproval: z.boolean() }).optional(),
+  // Keep the flag backwards-compatible with older admin clients that only
+  // submit requiresApproval. The server merges partial sale settings below.
+  sale: z.object({ requiresApproval: z.boolean().optional(), openEnabled: z.boolean().optional() }).optional(),
   addScheduler: z.string().uuid().optional(),
   removeScheduler: z.string().uuid().optional(),
   addLeaveRecorder: z.string().uuid().optional(),
@@ -73,8 +75,9 @@ export async function PUT(request: Request) {
       if (error) throw new HttpError(500, error.message)
     }
     if (body.sale) {
+      const currentSale = await getSaleSettings()
       const { error } = await admin.from('shift_settings')
-        .upsert({ key: 'sale', value: body.sale, updated_by: actor.id, updated_at: now })
+        .upsert({ key: 'sale', value: { ...currentSale, ...body.sale }, updated_by: actor.id, updated_at: now })
       if (error) throw new HttpError(500, error.message)
     }
     if (body.addScheduler) {

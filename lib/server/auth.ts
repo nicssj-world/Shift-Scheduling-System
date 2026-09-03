@@ -17,22 +17,31 @@ export async function getActor(): Promise<Actor | null> {
   } = await supabase.auth.getUser()
   if (!user) return null
 
+  return getActorForUserId(user.id)
+}
+
+/** Resolve the application actor from the shared profiles table. Both the
+ * Supabase-authenticated Web client and the verified LINE session use this
+ * resolver so role/status semantics cannot drift between channels. */
+export async function getActorForUserId(userId: string): Promise<Actor | null> {
+  if (!userId) return null
+
   const admin = getAdminClient()
   const [{ data: profile, error: profileError }, { data: schedulerRow }] = await Promise.all([
-    admin.from('profiles').select('id,name,role,dept,status,ephis_id,phone').eq('id', user.id).maybeSingle(),
-    admin.from('shift_schedulers').select('user_id').eq('user_id', user.id).maybeSingle(),
+    admin.from('profiles').select('id,name,role,dept,status,ephis_id,phone').eq('id', userId).maybeSingle(),
+    admin.from('shift_schedulers').select('user_id').eq('user_id', userId).maybeSingle(),
   ])
   if (profileError || !profile) return null
   const status = asString(profile.status).toLowerCase()
   if (status && status !== 'active') return null
 
   const role = normalizeRole(asString(profile.role))
-  // A designated scheduler (explicitly granted in shift_schedulers) has
-  // rights equivalent to Admin for scheduling/settings, regardless of their
-  // base profiles.role. Attendance uses requireAttendanceRecorder separately
-  // because its recorder list is intentionally narrower.
-  const isAdmin = role === 'Admin' || Boolean(schedulerRow)
+  // Keep the actual Admin role separate from an explicitly designated
+  // scheduler. A scheduler can manage the project, but cannot enter the
+  // system-settings or LINE Integration areas reserved for Admin.
+  const isAdmin = role === 'Admin'
   const isManager = role === 'Manager'
+  const isScheduler = isAdmin || Boolean(schedulerRow)
   return {
     id: asString(profile.id),
     ephisId: asString(profile.ephis_id),
@@ -42,10 +51,9 @@ export async function getActor(): Promise<Actor | null> {
     phone: asString(profile.phone) || null,
     isAdmin,
     isManager,
-    // Manager does NOT get schedule-management rights — only Admin/designated
-    // schedulers do. Kept as a separate field (rather than just reusing
-    // isAdmin) so schedule-management call sites stay self-documenting.
-    isScheduler: isAdmin,
+    // Manager does NOT get project-management rights unless an Admin
+    // explicitly adds the person to shift_schedulers.
+    isScheduler,
   }
 }
 
@@ -63,13 +71,13 @@ export async function requireScheduler() {
 
 export async function requireAdmin() {
   const actor = await requireActor()
-  if (!actor.isAdmin) throw new HttpError(403, 'ต้องเป็น Admin หรือผู้ได้รับมอบหมายจัดเวร')
+  if (!actor.isAdmin) throw new HttpError(403, 'ต้องเป็น Admin เท่านั้น')
   return actor
 }
 
 /** Attendance records have their own narrow permission list. Do not use
- * actor.isAdmin here: that flag intentionally includes designated schedulers
- * for the rest of the scheduling application. */
+ * project-management permissions here: a designated scheduler is not
+ * implicitly an attendance recorder. */
 export async function requireAttendanceRecorder() {
   const actor = await requireActor()
   if (actor.role === 'Admin') return actor

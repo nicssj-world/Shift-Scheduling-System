@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireAdmin } from '@/lib/server/auth'
+import { requireScheduler } from '@/lib/server/auth'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
@@ -15,7 +15,7 @@ const putSchema = z.object({
 
 export async function PUT(request: Request) {
   return respond(async () => {
-    await requireAdmin()
+    await requireScheduler()
     const body = await readJson(request, putSchema)
     const admin = getAdminClient()
     const rows = body.rows.map((r) => ({

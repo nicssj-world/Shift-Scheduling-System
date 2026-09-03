@@ -47,6 +47,7 @@ export async function GET(request: Request) {
       body: shifts.join(' และ '),
       link: '/schedule',
       dedupeKey: (uid) => `reminder:${tomorrow}:${uid}`,
+      sendLine: false,
     })
   }
 

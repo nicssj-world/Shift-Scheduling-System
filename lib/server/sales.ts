@@ -5,6 +5,7 @@ import { assertOwnerChangesValid } from '@/lib/server/assignment-changes'
 import { HttpError } from '@/lib/server/errors'
 import { throwRequestRpcError } from '@/lib/server/request-rpc'
 import { getAdminClient } from '@/lib/supabase/admin'
+import { expireOpenSaleListings } from '@/lib/server/open-sales'
 
 type ApplySaleOptions = {
   expectedStatus: string
@@ -24,10 +25,17 @@ export async function applySale(sale: Record<string, unknown>, options: ApplySal
   const saleId = String(sale.id)
   const sellerId = String(sale.seller_id)
   const buyerId = String(sale.buyer_id)
+  const saleMode = String(sale.sale_mode ?? 'direct')
+
+  // Approval can remain pending across a Bangkok calendar day boundary. Mark
+  // past open-sale items first so the RPC transfers only future active items.
+  if (saleMode === 'open') await expireOpenSaleListings()
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const { data: items, error: itemsError } = await admin
-      .from('shift_sale_items').select('assignment_id').eq('sale_request_id', saleId)
+    let itemsQuery = admin
+      .from('shift_sale_items').select('assignment_id,status').eq('sale_request_id', saleId)
+    if (saleMode === 'open') itemsQuery = itemsQuery.eq('status', 'active')
+    const { data: items, error: itemsError } = await itemsQuery
     if (itemsError) throw new HttpError(500, itemsError.message)
     const assignmentIds = (items ?? []).map((item) => String(item.assignment_id))
     if (assignmentIds.length === 0) throw new HttpError(409, 'ไม่มีเวรในคำขอนี้')
@@ -66,10 +74,13 @@ export async function applySale(sale: Record<string, unknown>, options: ApplySal
       newUserId: buyerId,
     })))
 
+    const expectedScheduleVersions = Object.fromEntries(
+      schedules.map((schedule) => [String(schedule.id), Number(schedule.assignment_version)]),
+    )
     const { data, error: applyError } = await admin.rpc('shift_apply_sale_request', {
       p_request_id: saleId,
       p_expected_status: options.expectedStatus,
-      p_expected_schedule_version: Number(schedules[0].assignment_version),
+      p_expected_schedule_versions: expectedScheduleVersions,
       p_actor_id: options.actorId,
       p_decided_by: options.decidedBy ?? null,
       p_responded_at: options.respondedAt ?? null,

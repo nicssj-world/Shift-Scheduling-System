@@ -12,6 +12,8 @@ type MemberRow = {
   user_id: string
   display_label: string | null
   is_active: boolean
+  chem_sero_weight: number
+  hemato_micros_weight: number
   displayName: string
   profile: StaffProfile
 }
@@ -28,6 +30,8 @@ export function StaffAdminView() {
   const [addUser, setAddUser] = useState('')
   const [editMember, setEditMember] = useState<MemberRow | null>(null)
   const [label, setLabel] = useState('')
+  const [chemSeroWeight, setChemSeroWeight] = useState(50)
+  const [hematoMicrosWeight, setHematoMicrosWeight] = useState(50)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -46,6 +50,14 @@ export function StaffAdminView() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const editTeam = editMember ? teams.find((team) => team.id === editMember.team_id) : null
+  const isCentralLabMember = editTeam?.code === 'MT_CENTRAL'
+  const sectionWeightsValid = Number.isInteger(chemSeroWeight)
+    && Number.isInteger(hematoMicrosWeight)
+    && chemSeroWeight >= 0 && chemSeroWeight <= 100
+    && hematoMicrosWeight >= 0 && hematoMicrosWeight <= 100
+    && chemSeroWeight + hematoMicrosWeight === 100
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true)
@@ -94,6 +106,7 @@ export function StaffAdminView() {
                     <th>รหัส Ephis</th>
                     <th>Role</th>
                     <th>เบอร์โทร</th>
+                    {team.code === 'MT_CENTRAL' && <th>Section weight</th>}
                     <th>สถานะ</th>
                     <th></th>
                   </tr>
@@ -106,11 +119,22 @@ export function StaffAdminView() {
                       <td>{m.profile?.ephis_id ?? '-'}</td>
                       <td className="text-xs">{m.profile?.role}</td>
                       <td className="text-xs">{m.profile?.phone ?? '-'}</td>
+                      {team.code === 'MT_CENTRAL' && (
+                        <td className="whitespace-nowrap text-xs">
+                          Chem/Sero {m.chem_sero_weight ?? 50}% · Hemato/Micros {m.hemato_micros_weight ?? 50}%
+                        </td>
+                      )}
                       <td>{m.is_active ? <Badge tone="green">ใช้งาน</Badge> : <Badge tone="gray">พัก</Badge>}</td>
                       <td className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="outline" disabled={busy}
-                            onClick={() => { setEditMember(m); setLabel(m.display_label ?? '') }}>
+                            aria-label={`แก้ไข ${m.profile?.name ?? m.displayName}`}
+                            onClick={() => {
+                              setEditMember(m)
+                              setLabel(m.display_label ?? '')
+                              setChemSeroWeight(m.chem_sero_weight ?? 50)
+                              setHematoMicrosWeight(m.hemato_micros_weight ?? 50)
+                            }}>
                             <Pencil size={13} />
                           </Button>
                           {m.is_active ? (
@@ -175,10 +199,54 @@ export function StaffAdminView() {
           <Field label="ชื่อที่แสดง (เว้นว่าง = อัตโนมัติ เช่น นฤมล(งาม))">
             <input className={inputCls} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="อัตโนมัติ" />
           </Field>
+          {isCentralLabMember && (
+            <div className="rounded-lg border border-line bg-slate-50 p-3">
+              <div className="mb-2 text-sm font-semibold">Central Lab section preference</div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Chem / Sero (%)">
+                  <input
+                    className={inputCls}
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={chemSeroWeight}
+                    aria-label="Chem / Sero section weight"
+                    onChange={(e) => setChemSeroWeight(Number(e.target.value))}
+                  />
+                </Field>
+                <Field label="Hemato / Micros (%)">
+                  <input
+                    className={inputCls}
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={hematoMicrosWeight}
+                    aria-label="Hemato / Micros section weight"
+                    onChange={(e) => setHematoMicrosWeight(Number(e.target.value))}
+                  />
+                </Field>
+              </div>
+              <div className={`mt-2 text-xs ${sectionWeightsValid ? 'text-emerald-700' : 'text-red-600'}`}>
+                รวม {chemSeroWeight + hematoMicrosWeight}% {sectionWeightsValid ? '(ถูกต้อง)' : '(ต้องรวม 100%)'}
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                น้ำหนักใช้เลือก section; Job ภายใน section จะหมุนให้สมดุลกัน · 0% เป็นความสำคัญต่ำสุด ไม่ได้ห้ามจัดลง section นี้
+              </p>
+            </div>
+          )}
           <Button
-            disabled={busy}
+            disabled={busy || (isCentralLabMember && !sectionWeightsValid)}
             onClick={() => run(async () => {
-              await api('/api/teams/members', { method: 'PATCH', body: JSON.stringify({ memberId: editMember!.id, displayLabel: label || null }) })
+              await api('/api/teams/members', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                  memberId: editMember!.id,
+                  displayLabel: label || null,
+                  ...(isCentralLabMember ? { chemSeroWeight, hematoMicrosWeight } : {}),
+                }),
+              })
               setEditMember(null)
             })}
           >

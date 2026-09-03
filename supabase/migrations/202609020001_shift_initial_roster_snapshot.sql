@@ -9,6 +9,6 @@ alter table public.shift_schedules
   add column if not exists initial_assignments jsonb;
 
 comment on column public.shift_schedules.initial_assignments is
-  'Immutable JSON snapshot of assignments captured immediately before first publication';
+  'Immutable JSON snapshot of assignments captured immediately before first publication; used by initial-roster views and cross-month scheduler carry-in';
 
 commit;

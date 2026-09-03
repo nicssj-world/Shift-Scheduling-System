@@ -22,7 +22,6 @@ export type ScheduleBundle = {
   assignments: Assignment[]
   initialAssignments: Assignment[] | null
   canManage: boolean
-  isAdmin: boolean
   me: string
 }
 
@@ -385,13 +384,13 @@ export function ScheduleView({ manage }: { manage: boolean }) {
               </Button>
             </>
           )}
-          {schedule && schedule.status === 'locked' && bundle.isAdmin && (
+          {schedule && schedule.status === 'locked' && bundle.canManage && (
             <Button
               variant="outline"
               disabled={busy}
               onClick={() => askConfirm(
                 'ปลดล็อคตารางเวร',
-                'ปลดล็อคตารางเวรเพื่อกลับมาแก้ไข/แลกเวรได้? (เฉพาะ Admin)',
+                'ปลดล็อคตารางเวรเพื่อกลับมาแก้ไข/แลกเวรได้? (Admin หรือผู้ได้รับมอบหมายจัดเวร)',
                 () => action(() => api(`/api/schedules/${schedule.id}`, { method: 'PATCH', body: JSON.stringify({ action: 'unlock' }) })),
               )}
             >

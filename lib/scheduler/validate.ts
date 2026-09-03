@@ -29,6 +29,12 @@ export type ValidateContext = {
   usesJobs?: boolean
   /** Production schedules use exact staffing; legacy unit fixtures may opt out. */
   exactCoverage?: boolean
+  /**
+   * A published roster that has already been changed by a swap or sale is
+   * allowed to drift from the original fairness distribution. Keep checking
+   * all safety/coverage rules, but do not report workload-distribution rules.
+   */
+  suppressFairness?: boolean
   unavailable: Record<string, string[]>
   config: SchedulerConfig
   carryIn?: CarryIn
@@ -48,6 +54,7 @@ const MAX_CONTIGUOUS_MIN = 16 * 60
  */
 export function validateAssignments(ctx: ValidateContext, assignments: AssignmentDraft[]): Violation[] {
   const violations: Violation[] = []
+  const suppressFairness = ctx.suppressFairness === true
   const slotByCode = new Map(ctx.slots.map((s) => [s.code, s]))
   const slotById = new Map(ctx.slots.map((s) => [s.shiftTypeId, s]))
   const allShiftTypes = new Map((ctx.shiftTypes ?? []).map((type) => [type.id, type]))
@@ -218,9 +225,9 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
     }
   }
 
-  // Fairness is a soft rule: leave, availability, or capacity can make a
-  // perfectly even holiday split impossible. Still surface a schedule-level
-  // warning when the avoidable spread is greater than one assignment.
+  // Holiday fairness remains a soft rule: leave, availability, or capacity
+  // can make a perfectly even holiday split impossible. Surface it as a
+  // warning while keeping per-shift-type balance as a hard rule below.
   const holidayCounts = new Map<string, number>()
   for (const { assignment } of validAssignments) {
     if (dayByDate.get(String(assignment.date))?.dayClass !== 'holiday') continue
@@ -230,7 +237,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
   const holidayUsers = ctx.members
     ? ctx.members.filter((member) => member.isActive !== false).map((member) => member.userId)
     : [...new Set(validAssignments.map(({ assignment }) => String(assignment.userId)))]
-  if (holidayUsers.length > 0 && holidayCounts.size > 0) {
+  if (!suppressFairness && holidayUsers.length > 0 && holidayCounts.size > 0) {
     const counts = holidayUsers.map((userId) => holidayCounts.get(userId) ?? 0)
     const max = Math.max(...counts)
     const min = Math.min(...counts)
@@ -244,7 +251,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
     }
   }
 
-  // Each shift type is a separate fairness dimension. A person receiving
+  // Each shift type is a separate hard fairness dimension. A person receiving
   // extra M/A/N assignments must not be hidden by an even overall total.
   const typeCounts = new Map<string, Map<string, number>>()
   for (const { assignment, slot } of validAssignments) {
@@ -254,6 +261,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
     typeCounts.set(slot.code, userCounts)
   }
   for (const slot of ctx.slots) {
+    if (suppressFairness) continue
     if (!ctx.days.some((day) => (slot.requiredByDayClass[day.dayClass] ?? 0) > 0)) continue
     const counts = holidayUsers.map((userId) => typeCounts.get(slot.code)?.get(userId) ?? 0)
     if (counts.length === 0) continue
@@ -264,7 +272,7 @@ export function validateAssignments(ctx: ValidateContext, assignments: Assignmen
         date: ctx.days[0]?.date ?? '',
         shiftTypeCode: slot.code,
         rule: 'type_imbalance',
-        severity: 'warning',
+        severity: 'error',
         message: `เวร ${slot.code} กระจายต่างกัน ${max - min} เวร (มากที่สุด ${max} / น้อยที่สุด ${min})`,
       })
     }

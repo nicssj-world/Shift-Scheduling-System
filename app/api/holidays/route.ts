@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { requireActor, requireAdmin } from '@/lib/server/auth'
+import { requireActor, requireScheduler } from '@/lib/server/auth'
 import { getHolidays } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
 import { readJson, respond } from '@/lib/server/route'
@@ -23,7 +23,7 @@ const createSchema = z.object({
 
 export async function POST(request: Request) {
   return respond(async () => {
-    const actor = await requireAdmin()
+    const actor = await requireScheduler()
     const body = await readJson(request, createSchema)
     const admin = getAdminClient()
     const { error } = await admin.from('shift_holidays').upsert({
@@ -44,7 +44,7 @@ const deleteSchema = z.object({ holidayDate: z.string().regex(/^\d{4}-\d{2}-\d{2
 
 export async function DELETE(request: Request) {
   return respond(async () => {
-    await requireAdmin()
+    await requireScheduler()
     const body = await readJson(request, deleteSchema)
     const admin = getAdminClient()
     const { error } = await admin.from('shift_holidays').delete().eq('holiday_date', body.holidayDate)

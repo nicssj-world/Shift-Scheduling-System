@@ -302,9 +302,11 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
     }
   }
 
-  // soft warning: each shift type must also be balanced independently. The
+  // Hard fairness rule: each shift type must be balanced independently. The
   // current-month type count is intentionally separate from rolling history,
-  // so the extra slot rotates to people who had fewer of that type before.
+  // so no person may finish more than one assignment ahead of another for
+  // the same shift type. Leave/capacity conflicts are surfaced as errors
+  // instead of silently publishing an avoidably skewed roster.
   for (const slot of input.slots) {
     if (!days.some((day) => (slot.requiredByDayClass[day.dayClass] ?? 0) > 0)) continue
     const typeCounts = staff.map((member) => stats[member.userId].currentByType[slot.code] ?? 0)
@@ -316,7 +318,7 @@ export function generateSchedule(input: SchedulerInput): SchedulerResult {
         date: days[0]?.date ?? '',
         shiftTypeCode: slot.code,
         rule: 'type_imbalance',
-        severity: 'warning',
+        severity: 'error',
         message: `เวร ${slot.code} กระจายต่างกัน ${max - min} เวร (มากที่สุด ${max} / น้อยที่สุด ${min})`,
       })
     }

@@ -286,7 +286,7 @@ describe('generateSchedule', () => {
     expect(Math.max(...pairCounts.values())).toBeLessThanOrEqual(2)
   })
 
-  it('emits understaffed violations instead of breaking constraints', () => {
+  it('emits understaffed and hard fairness violations when capacity makes balance impossible', () => {
     // 3 staff cannot fill 2+2 daily slots plus rest rules
     const input = baseInput({ staff: makeStaff(3) })
     const result = generateSchedule(input)
@@ -294,7 +294,8 @@ describe('generateSchedule', () => {
     expect(result.violations.find((v) => v.rule === 'understaffed')?.message).toContain('ผู้สมัครถูกตัดออก:')
     const errors = validateAssignments(input, result.assignments)
       .filter((v) => v.severity === 'error' && v.rule !== 'understaffed')
-    expect(errors).toEqual([])
+    expect(errors.every((v) => v.rule === 'type_imbalance')).toBe(true)
+    expect(errors.some((v) => v.shiftTypeCode === 'N')).toBe(true)
   })
 
   it('repairs a greedy dead-end by moving one earlier assignment', () => {

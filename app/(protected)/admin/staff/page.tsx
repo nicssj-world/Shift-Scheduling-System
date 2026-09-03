@@ -1,7 +1,7 @@
 import { StaffAdminView } from '@/components/admin/staff-admin-view'
-import { requireAdminPageActor } from '@/lib/server/auth'
+import { requireSchedulerPageActor } from '@/lib/server/auth'
 
 export default async function AdminStaffPage() {
-  await requireAdminPageActor()
+  await requireSchedulerPageActor()
   return <StaffAdminView />
 }

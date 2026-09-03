@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   ArrowLeftRight, BarChart3, Bell, CalendarClock, CalendarCog, CalendarDays,
-  ClipboardList, FileSpreadsheet, LogOut, Menu, Palmtree, Settings, Sparkles, Users, X,
+  ClipboardList, Coins, FileSpreadsheet, LogOut, Menu, MessageCircle, Palmtree, Settings, Sparkles, Users,
 } from 'lucide-react'
 import { NotificationBell } from '@/components/notification-bell'
 import { createClient } from '@/lib/supabase/client'
@@ -33,6 +33,7 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
         { href: '/schedule', label: 'ตารางเวร', icon: <CalendarDays size={17} />, show: true },
         { href: '/schedule/manage', label: 'จัดตารางเวร', icon: <CalendarCog size={17} />, show: actor.isScheduler },
         { href: '/swaps', label: 'แลก/ขายเวร', icon: <ArrowLeftRight size={17} />, show: true },
+        { href: '/sales/open', label: 'เวรเปิดขาย', icon: <Coins size={17} />, show: true },
         { href: '/leaves', label: 'ทะเบียนวันลา', icon: <Palmtree size={17} />, show: true },
       ],
     },
@@ -48,10 +49,11 @@ export function AppShell({ actor, children }: { actor: ShellActor; children: Rea
     {
       section: 'ตั้งค่า',
       items: [
-        { href: '/admin/staff', label: 'บุคลากรและทีมเวร', icon: <Users size={17} />, show: actor.isAdmin },
-        { href: '/admin/shift-types', label: 'ประเภทเวร', icon: <ClipboardList size={17} />, show: actor.isAdmin },
-        { href: '/admin/holidays', label: 'วันหยุดพิเศษ', icon: <CalendarClock size={17} />, show: actor.isAdmin },
+        { href: '/admin/staff', label: 'บุคลากรและทีมเวร', icon: <Users size={17} />, show: actor.isScheduler },
+        { href: '/admin/shift-types', label: 'ประเภทเวร', icon: <ClipboardList size={17} />, show: actor.isScheduler },
+        { href: '/admin/holidays', label: 'วันหยุดพิเศษ', icon: <CalendarClock size={17} />, show: actor.isScheduler },
         { href: '/admin/settings', label: 'ตั้งค่าระบบ', icon: <Settings size={17} />, show: actor.isAdmin },
+        { href: '/admin/line', label: 'LINE Integration', icon: <MessageCircle size={17} />, show: actor.isAdmin },
       ],
     },
   ]

@@ -13,9 +13,13 @@ export async function respond<T>(handler: () => Promise<T>) {
     const data = await handler()
     return Response.json(data, { headers: NO_STORE })
   } catch (error) {
-    if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status, headers: NO_STORE })
+    if (error instanceof HttpError) {
+      if (error.status >= 500) console.error('API handler failed', error.name)
+      const message = error.status >= 500 ? 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่' : error.message
+      return Response.json({ error: message }, { status: error.status, headers: NO_STORE })
+    }
     if (error instanceof z.ZodError) return Response.json({ error: error.issues[0]?.message ?? 'Invalid request' }, { status: 400, headers: NO_STORE })
-    const message = error instanceof Error ? error.message : 'Unexpected error'
-    return Response.json({ error: message }, { status: 500, headers: NO_STORE })
+    console.error('API handler failed', error instanceof Error ? error.name : 'unknown')
+    return Response.json({ error: 'เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่' }, { status: 500, headers: NO_STORE })
   }
 }

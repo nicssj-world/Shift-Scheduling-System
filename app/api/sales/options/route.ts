@@ -1,27 +1,40 @@
 import { requireActor } from '@/lib/server/auth'
 import { bangkokDateString } from '@/lib/dates'
-import { getShiftTypes, getTeamMembersForTeams } from '@/lib/server/data'
+import { getShiftTypes, getTeamMembersForTeams, getTeams } from '@/lib/server/data'
 import { HttpError } from '@/lib/server/errors'
-import { parseOptionMonth } from '@/lib/server/pagination'
 import { getPendingAssignmentIds } from '@/lib/server/request-conflicts'
 import { respond } from '@/lib/server/route'
 import { getAdminClient } from '@/lib/supabase/admin'
+import { expireOpenSaleListings, normalizeOpenSaleMonthRange } from '@/lib/server/open-sales'
 
 /** Options for the create-sale modal: all my shifts in the selected month.
  * Past or reserved shifts stay visible with a reason, but cannot be sold. */
 export async function GET(request: Request) {
   return respond(async () => {
     const actor = await requireActor()
+    await expireOpenSaleListings()
     const admin = getAdminClient()
     const today = bangkokDateString()
-    const month = parseOptionMonth(new URL(request.url))
+    const url = new URL(request.url)
+    const month = url.searchParams.get('month')
+    const months = month
+      ? normalizeOpenSaleMonthRange(month, month)
+      : normalizeOpenSaleMonthRange(url.searchParams.get('from'), url.searchParams.get('to'))
+    const requestedTeamId = url.searchParams.get('teamId')
 
     const { data: schedules, error } = await admin
       .from('shift_schedules').select('id,team_id,status')
-      .eq('status', 'published').eq('month', `${month}-01`)
+      .eq('status', 'published')
+      .gte('month', `${months[0]}-01`).lte('month', `${months.at(-1)}-01`)
     if (error) throw new HttpError(500, error.message)
     const scheduleIds = (schedules ?? []).map((s) => String(s.id))
-    if (scheduleIds.length === 0) return { mine: [], members: [] }
+    if (requestedTeamId) {
+      const teams = await getTeams()
+      if (!teams.some((team) => team.is_active && String(team.id) === requestedTeamId)) throw new HttpError(404, 'ไม่พบทีม')
+      const filtered = (schedules ?? []).filter((schedule) => String(schedule.team_id) === requestedTeamId)
+      scheduleIds.splice(0, scheduleIds.length, ...filtered.map((schedule) => String(schedule.id)))
+    }
+    if (scheduleIds.length === 0) return { from: months[0], to: months.at(-1), mine: [], members: [] }
     const teamByScheduleId = new Map((schedules ?? []).map((s) => [String(s.id), String(s.team_id)]))
 
     const [myAssignmentsResult, shiftTypes] = await Promise.all([
@@ -54,6 +67,7 @@ export async function GET(request: Request) {
         scheduleId: String(a.schedule_id),
         teamId: teamByScheduleId.get(String(a.schedule_id)) ?? '',
         date: String(a.work_date),
+        workDate: String(a.work_date),
         code: type?.code ?? '?',
         typeName: type?.name_th ?? '?',
         selectable: String(a.work_date) >= today && !blockedIds.has(String(a.id)),
@@ -66,6 +80,8 @@ export async function GET(request: Request) {
     }
 
     return {
+      from: months[0],
+      to: months.at(-1),
       mine: myAssignments.map(describe),
       members,
     }

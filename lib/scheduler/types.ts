@@ -43,13 +43,26 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   weights: { total: 10, type: 4, weekend: 6, consecutive: 3, pairing: 4 },
 }
 
+/** Section labels used by the Central Lab Job preference feature. */
+export type CentralLabSection = 'chem_sero' | 'hemato_micros'
+
+export type SectionWeights = Record<CentralLabSection, number>
+
 export type StaffIn = {
   userId: string
   /** stable deterministic tiebreak key (ephis id) */
   key: string
+  /** Optional per-member Central Lab preference; absent means neutral 50/50. */
+  sectionWeights?: SectionWeights
 }
 
-export type JobIn = { id: string; code: string; sortOrder: number }
+export type JobIn = {
+  id: string
+  code: string
+  sortOrder: number
+  /** Present only for Central Lab Jobs; other teams retain legacy rotation. */
+  section?: CentralLabSection | null
+}
 
 /** Assignment from a completed prior month used for boundary constraints + fairness carry-in. */
 export type CarryIn = {

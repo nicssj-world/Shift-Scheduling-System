@@ -39,8 +39,8 @@ export function makeStaff(count: number): StaffIn[] {
 }
 
 export const FOUR_JOBS: JobIn[] = [
-  { id: 'job-chem', code: 'CHEM', sortOrder: 1 },
-  { id: 'job-sero', code: 'SERO', sortOrder: 2 },
-  { id: 'job-hemato', code: 'HEMATO', sortOrder: 3 },
-  { id: 'job-micross', code: 'MICROSS', sortOrder: 4 },
+  { id: 'job-chem', code: 'CHEM', sortOrder: 1, section: 'chem_sero' },
+  { id: 'job-sero', code: 'SERO', sortOrder: 2, section: 'chem_sero' },
+  { id: 'job-hemato', code: 'HEMATO', sortOrder: 3, section: 'hemato_micros' },
+  { id: 'job-micross', code: 'MICROSS', sortOrder: 4, section: 'hemato_micros' },
 ]

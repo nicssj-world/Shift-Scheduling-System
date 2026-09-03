@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { ArrowRight, Ban, CalendarDays, CheckCircle2, Clock3, Coins, Inbox, Plus, XCircle } from 'lucide-react'
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, inputCls } from '@/components/ui'
 import { HistoryControls } from '@/components/history-controls'
@@ -15,7 +16,7 @@ type SaleRow = {
   status: SaleStatus
   reason: string | null
   seller_id: string
-  buyer_id: string
+  buyer_id: string | null
   sellerName: string
   buyerName: string
   shifts: { date: string; type: string; code: string }[]
@@ -38,12 +39,14 @@ type OptionShift = {
 type Member = { userId: string; userName: string; teamId: string }
 
 const TONE: Record<SaleStatus, 'blue' | 'green' | 'amber' | 'red' | 'gray' | 'violet'> = {
+  open: 'blue',
   pending_buyer: 'amber',
   pending_approval: 'violet',
   approved: 'green',
   declined: 'red',
   rejected: 'red',
   cancelled: 'gray',
+  expired: 'gray',
 }
 
 function thaiDateTime(value: string) {
@@ -285,7 +288,10 @@ export function SalesView() {
           <h1 className="text-xl font-bold tracking-tight text-ink">ขายเวร</h1>
           <p className="mt-1 text-sm text-slate-600">ติดตามข้อเสนอขายเวร การอนุมัติ และประวัติย้อนหลัง</p>
         </div>
-        <Button className="min-h-11 w-full sm:w-auto" onClick={openCreate}><Plus size={16} /> ขายเวร</Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Link href="/sales/open" className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-brand-200 bg-brand-50 px-4 text-sm font-semibold text-brand-800 hover:bg-brand-100">เวรเปิดขาย</Link>
+          <Button className="min-h-11 w-full sm:w-auto" onClick={openCreate}><Plus size={16} /> ขายเวร</Button>
+        </div>
       </div>
       <ErrorNote error={error} />
 

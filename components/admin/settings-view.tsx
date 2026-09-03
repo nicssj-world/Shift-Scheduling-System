@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Save, UserMinus, UserPlus } from 'lucide-react'
 import { Button, Card, ErrorNote, Field, Spinner, inputCls } from '@/components/ui'
 import { api } from '@/lib/client-api'
+import { LineGroupMappingCard } from '@/components/admin/line-group-mapping-card'
 import type { LeaveRecorder, StaffProfile } from '@/lib/types'
 
 type SchedulerConfig = {
@@ -17,7 +18,7 @@ type SchedulerConfig = {
 type SettingsData = {
   scheduler: SchedulerConfig
   swap: { requiresApproval: boolean }
-  sale: { requiresApproval: boolean }
+  sale: { requiresApproval: boolean; openEnabled: boolean }
   schedulers: { userId: string; name: string }[]
   leaveRecorders: LeaveRecorder[]
   canManageLeaveRecorders: boolean
@@ -128,14 +129,25 @@ export function SettingsView() {
         <h2 className="text-sm font-bold">การขายเวร</h2>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={data.sale.requiresApproval}
-            onChange={(e) => setData({ ...data, sale: { requiresApproval: e.target.checked } })} />
+            onChange={(e) => setData({ ...data, sale: { ...data.sale, requiresApproval: e.target.checked } })} />
           การขายเวรต้องได้รับอนุมัติจากผู้จัดเวร (ปิด = ผู้ซื้อ ตอบรับแล้วปรับตารางทันที)
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" checked={data.sale.openEnabled}
+            onChange={(e) => setData({ ...data, sale: { ...data.sale, openEnabled: e.target.checked } })} />
+          <span>
+            <span className="block font-semibold">เปิดตลาดเวรเปิดขาย (เว็บ + LINE)</span>
+            <span className="block text-xs text-slate-500">สมาชิกทีมสามารถกดรับเวรที่ประกาศได้ คนแรกที่ผ่านกฎจะได้สิทธิ์</span>
+          </span>
         </label>
         <Button disabled={busy} onClick={() => save({ sale: data.sale })}><Save size={15} /> บันทึก</Button>
       </Card>
 
+      <LineGroupMappingCard />
+
       <Card className="flex flex-col gap-3">
-        <h2 className="text-sm font-bold">ผู้ได้รับมอบหมายจัดเวร (นอกเหนือจาก Admin/Manager)</h2>
+        <h2 className="text-sm font-bold">ผู้ได้รับมอบหมายจัดเวร (นอกเหนือจาก Admin)</h2>
+        <p className="text-xs leading-5 text-slate-500">Manager ไม่มีสิทธิ์จัดการโดยอัตโนมัติ ผู้ที่ไม่ใช่ Admin ต้องถูกเพิ่มในรายการนี้ก่อนจึงจะจัดการตารางเวร ทีม ประเภทเวร และวันหยุดได้ ส่วนตั้งค่าระบบกับ LINE Integration เฉพาะ Admin</p>
         {data.schedulers.length === 0 && <div className="text-[13px] text-slate-400">ยังไม่มีผู้ได้รับมอบหมาย</div>}
         {data.schedulers.map((sch) => (
           <div key={sch.userId} className="flex items-center justify-between rounded-xl border border-line px-3 py-2 text-sm">

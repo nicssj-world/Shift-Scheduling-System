@@ -4,6 +4,7 @@ import { datesOfMonth } from '@/lib/dates'
 import { generateSchedule } from '@/lib/scheduler/engine'
 import { addRegularWork, addToPerson, checkAssignment, toInterval, type PersonState } from '@/lib/scheduler/constraints'
 import { consecutiveWorkDaysBefore, emptyStats, fairnessScore } from '@/lib/scheduler/fairness'
+import { centralLabSectionForJobCode } from '@/lib/scheduler/rotation'
 import type { AssignmentDraft, SchedulerInput, Violation } from '@/lib/scheduler/types'
 import { validateAssignments, type ValidateContext } from '@/lib/scheduler/validate'
 import {
@@ -91,18 +92,36 @@ export function toValidateContext(ctx: ScheduleContext): ValidateContext {
 
 export async function validateSchedule(ctx: ScheduleContext): Promise<Violation[]> {
   const rows = await getAssignments(ctx.schedule.id)
-  return validateAssignments(toValidateContext(ctx), toDrafts(ctx, rows as Record<string, unknown>[]))
+  const hasTransferredAssignments = rows.some((row) => (
+    row.source === 'swap' || row.source === 'sale'
+  ))
+  return validateAssignments(
+    { ...toValidateContext(ctx), suppressFairness: hasTransferredAssignments },
+    toDrafts(ctx, rows as Record<string, unknown>[]),
+  )
 }
 
 export async function runGenerate(ctx: ScheduleContext, actorId: string) {
   if (ctx.schedule.status !== 'draft') throw new HttpError(409, 'สร้างตารางอัตโนมัติได้เฉพาะฉบับร่าง')
 
+  const isCentralLab = ctx.team.code === 'MT_CENTRAL'
   const input: SchedulerInput = {
     days: ctx.days,
     slots: ctx.slots,
-    staff: ctx.members.map((m) => ({ userId: m.user_id, key: m.profile.ephis_id ?? m.user_id })),
+    staff: ctx.members.map((m) => ({
+      userId: m.user_id,
+      key: m.profile.ephis_id ?? m.user_id,
+      ...(isCentralLab ? {
+        sectionWeights: sectionWeightsForMember(m),
+      } : {}),
+    })),
     unavailable: ctx.unavailable,
-    jobs: ctx.jobs.map((j) => ({ id: j.id, code: j.code, sortOrder: j.sort_order })),
+    jobs: ctx.jobs.map((j) => ({
+      id: j.id,
+      code: j.code,
+      sortOrder: j.sort_order,
+      section: isCentralLab ? centralLabSectionForJobCode(j.code) : null,
+    })),
     usesJobs: ctx.team.uses_jobs,
     carryIn: ctx.carryIn,
     config: ctx.config,
@@ -110,6 +129,15 @@ export async function runGenerate(ctx: ScheduleContext, actorId: string) {
   const result = generateSchedule(input)
   const jobConfigurationError = result.violations.find((violation) => violation.rule === 'job_coverage')
   if (jobConfigurationError) throw new HttpError(409, jobConfigurationError.message)
+  const typeBalanceError = result.violations.find((violation) => (
+    violation.rule === 'type_imbalance' && violation.severity === 'error'
+  ))
+  if (typeBalanceError) {
+    throw new HttpError(
+      409,
+      `สร้างตารางไม่ได้: ${typeBalanceError.message} — กรุณาตรวจสอบวันลา จำนวนสมาชิก หรือข้อจำกัดการจัดเวร แล้วลองใหม่`,
+    )
+  }
 
   const admin = getAdminClient()
   const rows = result.assignments.map((a) => ({
@@ -133,6 +161,17 @@ export async function runGenerate(ctx: ScheduleContext, actorId: string) {
   }
 
   return result
+}
+
+function sectionWeightsForMember(member: MemberWithProfile) {
+  const chemSero = Number(member.chem_sero_weight)
+  const hematoMicros = Number(member.hemato_micros_weight)
+  if (Number.isInteger(chemSero) && chemSero >= 0 && chemSero <= 100
+    && Number.isInteger(hematoMicros) && hematoMicros >= 0 && hematoMicros <= 100
+    && chemSero + hematoMicros === 100) {
+    return { chem_sero: chemSero, hemato_micros: hematoMicros }
+  }
+  return { chem_sero: 50, hemato_micros: 50 }
 }
 
 /** Candidate list for the manual cell editor, sorted by fairness. */
@@ -312,7 +351,6 @@ export async function getScheduleBundle(month: string, teamId: string | null, ac
     assignments,
     initialAssignments,
     canManage: actor.isScheduler,
-    isAdmin: actor.isAdmin,
     me: actor.id,
   }
 }

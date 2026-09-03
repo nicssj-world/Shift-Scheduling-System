@@ -16,5 +16,8 @@ export function throwRequestRpcError(error: DatabaseError, fallback: string): ne
   if (error.code === 'P0001') {
     throw new HttpError(409, error.message || fallback)
   }
+  if (error.code === '42501') {
+    throw new HttpError(409, error.message || fallback)
+  }
   throw new HttpError(500, fallback)
 }

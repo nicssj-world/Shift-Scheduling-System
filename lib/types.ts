@@ -51,9 +51,10 @@ export type Actor = {
   role: Role
   dept: string | null
   phone: string | null
+  /** The actual profiles.role = Admin flag; does not include schedulers. */
   isAdmin: boolean
   isManager: boolean
-  /** Admin, Manager, or explicitly granted in shift_schedulers */
+  /** Admin or explicitly granted in shift_schedulers for project management. */
   isScheduler: boolean
 }
 
@@ -88,6 +89,9 @@ export type TeamMember = {
   display_label: string | null
   is_active: boolean
   sort_order: number
+  /** Central Lab section preference; both values are percentages that sum to 100. */
+  chem_sero_weight: number
+  hemato_micros_weight: number
   profile?: StaffProfile
 }
 
@@ -300,17 +304,20 @@ export type SwapRequest = {
 }
 
 export type SaleStatus =
+  | 'open'
   | 'pending_buyer'
   | 'pending_approval'
   | 'approved'
   | 'declined'
   | 'rejected'
   | 'cancelled'
+  | 'expired'
 
 export type SaleRequest = {
   id: string
   seller_id: string
-  buyer_id: string
+  buyer_id: string | null
+  sale_mode?: 'direct' | 'open'
   reason: string | null
   status: SaleStatus
   buyer_responded_at: string | null
@@ -320,12 +327,14 @@ export type SaleRequest = {
 }
 
 export const SALE_STATUS_TH: Record<SaleStatus, string> = {
+  open: 'เปิดรับผู้รับเวร',
   pending_buyer: 'รอผู้ซื้อตอบรับ',
   pending_approval: 'รอผู้จัดเวรอนุมัติ',
   approved: 'อนุมัติแล้ว',
   declined: 'ผู้ซื้อปฏิเสธ',
   rejected: 'ผู้จัดเวรไม่อนุมัติ',
   cancelled: 'ยกเลิก',
+  expired: 'หมดอายุ',
 }
 
 export type AppNotification = {
